@@ -103,3 +103,67 @@
 **Context**: Units Generation complete. Transitioning to CONSTRUCTION PHASE.
 
 ---
+
+## Construction — Unit 1 Functional Design Started
+**Timestamp**: 2026-06-04T00:00:13Z
+**User Input**: "proceed"
+**AI Response**: Units Generation approved. Entered CONSTRUCTION PHASE. Created unit-1-functional-design-plan.md with 5 clarifying questions covering JWT storage, pending-member invite flow, archive override, pagination strategy, and removed-member display. Awaiting user answers.
+**Context**: Unit 1 Functional Design — awaiting answers before generating artifacts.
+
+---
+
+## Unit 1 Functional Design — Complete
+**Timestamp**: 2026-06-04T00:00:14Z
+**User Input**: "done" (answers in unit-1-functional-design-plan.md)
+**AI Response**: Q1=A (HttpOnly cookie), Q2=C (silent pending-member linking), Q3=B (force archive allowed with audit log), Q4=B (offset/limit pagination), Q5=B (display name → "Former Member"). Generated 3 artifacts: domain-entities.md (6 entities: User, Group, Member, Expense, ExpenseSplit, Settlement), business-rules.md (34 rules across 7 categories), business-logic-model.md (9 detailed workflows WF-1 to WF-9). Awaiting user approval.
+**Context**: Unit 1 Functional Design complete. Presenting for approval before NFR Requirements.
+
+---
+
+## Unit 1 Functional Design — Approved / NFR Requirements Started
+**Timestamp**: 2026-06-04T00:00:15Z
+**User Input**: "proceed"
+**AI Response**: Functional Design approved. Proceeding to NFR Requirements for Unit 1. Most decisions already locked from requirements.md. Created unit-1-nfr-requirements-plan.md with 5 open questions covering compute target, rate limiting, CSRF strategy, log aggregation, and DB pool sizing.
+**Context**: Unit 1 NFR Requirements — awaiting answers.
+
+---
+
+## Unit 1 NFR Requirements — Complete
+**Timestamp**: 2026-06-04T00:00:16Z
+**User Input**: "done" (answers in unit-1-nfr-requirements-plan.md)
+**AI Response**: Q1=A (ECS Fargate), Q2=A (per-IP WAF rate limiting), Q3=A (double-submit CSRF cookie), Q4=A (CloudWatch Logs, 90-day retention), Q5=A (pool min 2 max 10). Generated nfr-requirements.md (full SECURITY-01 to SECURITY-15 compliance specification) and tech-stack-decisions.md (16 library/tool decisions + 14 env var manifest). Awaiting user approval.
+**Context**: Unit 1 NFR Requirements complete. Presenting for approval before NFR Design.
+
+---
+
+## Unit 1 NFR Requirements — Approved / NFR Design Started
+**Timestamp**: 2026-06-04T00:00:17Z
+**User Input**: "continue"
+**AI Response**: NFR Requirements approved. Proceeding to NFR Design for Unit 1. Created unit-1-nfr-design-plan.md with 3 open questions covering response caching strategy, Alembic migration deployment pattern, and OpenAPI schema exposure in production.
+**Context**: Unit 1 NFR Design — awaiting answers.
+
+---
+
+## Unit 1 NFR Design — Complete
+**Timestamp**: 2026-06-04T00:00:18Z
+**User Input**: "done" (answers in unit-1-nfr-design-plan.md)
+**AI Response**: Q1=A (no caching), Q2=A (migration as one-off ECS task pre-deploy), Q3=A (OpenAPI internal/VPC only). Generated nfr-design-patterns.md (9 patterns: JWT+CSRF, correlation ID, global error handler, security headers, input validation layers, repository unit-of-work, migration task, OpenAPI access control, health check) and logical-components.md (middleware stack, logical component map, infrastructure logical view, DI wiring, no-cache decision record). Awaiting approval.
+**Context**: Unit 1 NFR Design complete. Presenting for approval before Infrastructure Design.
+
+---
+
+## Unit 1 NFR Design — Approved / Infrastructure Design Started
+**Timestamp**: 2026-06-04T00:00:19Z
+**User Input**: "proceed"
+**AI Response**: NFR Design approved. Proceeding to Infrastructure Design for Unit 1. Also covers Unit 3 frontend infrastructure (no separate stage). Created unit-1-infrastructure-design-plan.md with 5 questions: AWS region, staging env, frontend hosting, CDK stack organisation, RDS read replica.
+**Context**: Unit 1 Infrastructure Design — awaiting answers.
+
+---
+
+## Unit 1 Infrastructure Design — Complete
+**Timestamp**: 2026-06-04T00:00:20Z
+**User Input**: "done" (answers in unit-1-infrastructure-design-plan.md)
+**AI Response**: Q1=B (eu-west-1), Q2=A (separate prod+staging VPCs), Q3=A (S3+CloudFront for frontend), Q4=B (3 CDK stacks: Network+Application+Frontend), Q5=A (no read replica). Generated infrastructure-design.md (VPC, ALB, ECS Fargate, RDS, Secrets Manager, ECR, CloudWatch, S3, CloudFront specs for prod+staging), deployment-architecture.md (full ASCII diagram, CDK stack TypeScript structure, CI/CD pipeline steps), shared-infrastructure.md (Docker Compose, CDK project layout, GitHub Actions secrets). Awaiting approval.
+**Context**: Unit 1 Infrastructure Design complete. All 4 design stages done. Presenting for approval before Code Generation.
+
+---
