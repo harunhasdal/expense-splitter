@@ -167,3 +167,27 @@
 **Context**: Unit 1 Infrastructure Design complete. All 4 design stages done. Presenting for approval before Code Generation.
 
 ---
+
+## Unit 1 Infrastructure Design — Approved / Code Generation Planning
+**Timestamp**: 2026-06-04T00:00:21Z
+**User Input**: "proceed"
+**AI Response**: Infrastructure Design approved. Created unit-1-code-generation-plan.md (Part 1 Planning). 14 steps covering project setup, core infra, 4 domain modules, balance stub, migrations, deployment artifacts, and security compliance checklist. Stories US-1-1 to US-1-8 + US-2-7. Awaiting plan approval before Part 2 generation.
+**Context**: Unit 1 Code Generation — Part 1 Planning complete. Awaiting approval.
+
+---
+
+## Unit 1 Code Generation — Part 2 Generation Started
+**Timestamp**: 2026-06-04T00:00:22Z
+**User Input**: "continue"
+**AI Response**: Plan approved. Executing Part 2 — generating all backend/ code across 14 steps.
+**Context**: Unit 1 Code Generation — Part 2 underway.
+
+---
+
+## Unit 1 Code Generation — Complete
+**Timestamp**: 2026-06-04T00:00:23Z
+**User Input**: N/A (generation)
+**AI Response**: Generated all backend/ code across 14 steps. 37 Python files + 6 CDK TypeScript files + 4 CI/CD files + docker-compose.yml. All stories US-1-1 to US-1-8 + US-2-7 implemented. Security checklist verified. Awaiting user approval.
+**Context**: Unit 1 Code Generation complete. Presenting for approval before Unit 2 (Balance Engine).
+
+---

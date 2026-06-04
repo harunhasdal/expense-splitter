@@ -1,0 +1,57 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: [main]
+
+jobs:
+  backend-ci:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v3
+        with:
+          version: "0.2.33"
+      - run: uv sync --frozen
+      - run: uv run ruff check .
+      - run: uv run mypy . --strict
+      - run: uv run pytest tests/ --cov=. --cov-fail-under=80
+        env:
+          DATABASE_URL: "sqlite+aiosqlite:///:memory:"
+          JWT_PRIVATE_KEY: "test"
+          JWT_PUBLIC_KEY: "test"
+          JWT_EXPIRY_SECONDS: "86400"
+          JWT_ISSUER: "http://localhost"
+          ALLOWED_ORIGINS: "http://localhost:5173"
+          GOOGLE_CLIENT_ID: "test"
+          GOOGLE_CLIENT_SECRET: "test"
+          GITHUB_CLIENT_ID: "test"
+          GITHUB_CLIENT_SECRET: "test"
+          CSRF_SECRET_KEY: "test-secret-key-minimum-32-chars!!"
+          APP_BASE_URL: "http://localhost:8000"
+      - run: uv run pip-audit
+
+  frontend-ci:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm run lint
+      - run: pnpm run type-check
+      - run: pnpm run build

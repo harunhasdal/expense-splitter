@@ -1,0 +1,142 @@
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    outputs:
+      image-tag: ${{ steps.meta.outputs.sha }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ secrets.AWS_REGION }}
+      - uses: aws-actions/amazon-ecr-login@v2
+      - id: meta
+        run: echo "sha=${GITHUB_SHA::8}" >> $GITHUB_OUTPUT
+      - run: |
+          docker build -t ${{ secrets.ECR_REGISTRY }}/expense-splitter-api:${{ steps.meta.outputs.sha }} backend/
+          docker push ${{ secrets.ECR_REGISTRY }}/expense-splitter-api:${{ steps.meta.outputs.sha }}
+      - name: Generate OpenAPI schema
+        run: |
+          cd backend
+          pip install uv && uv sync --frozen
+          python -c "
+          import json, os
+          os.environ.update({
+            'DATABASE_URL': 'sqlite+aiosqlite:///:memory:',
+            'JWT_PRIVATE_KEY': 'test', 'JWT_PUBLIC_KEY': 'test',
+            'JWT_EXPIRY_SECONDS': '86400', 'JWT_ISSUER': 'http://localhost',
+            'ALLOWED_ORIGINS': 'http://localhost', 'GOOGLE_CLIENT_ID': 'test',
+            'GOOGLE_CLIENT_SECRET': 'test', 'GITHUB_CLIENT_ID': 'test',
+            'GITHUB_CLIENT_SECRET': 'test', 'CSRF_SECRET_KEY': 'test-32-chars!!!!!!!!!!!!!!!!',
+            'APP_BASE_URL': 'http://localhost',
+          })
+          from main import app; print(json.dumps(app.openapi()))
+          " > ../frontend/openapi.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: openapi
+          path: frontend/openapi.json
+
+  deploy-staging:
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    environment: staging
+    steps:
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ secrets.AWS_REGION }}
+      - name: Run migration (staging)
+        run: |
+          TASK_ARN=$(aws ecs run-task \
+            --cluster ${{ secrets.ECS_CLUSTER_STAGING }} \
+            --task-definition ${{ secrets.MIGRATION_TASK_DEFINITION }} \
+            --overrides '{"containerOverrides":[{"name":"api","command":["alembic","upgrade","head"]}]}' \
+            --launch-type FARGATE \
+            --query 'tasks[0].taskArn' --output text)
+          aws ecs wait tasks-stopped --cluster ${{ secrets.ECS_CLUSTER_STAGING }} --tasks $TASK_ARN
+          EXIT=$(aws ecs describe-tasks --cluster ${{ secrets.ECS_CLUSTER_STAGING }} --tasks $TASK_ARN \
+            --query 'tasks[0].containers[0].exitCode' --output text)
+          if [ "$EXIT" != "0" ]; then echo "Migration failed (exit $EXIT)"; exit 1; fi
+      - name: Deploy to staging
+        run: |
+          aws ecs update-service \
+            --cluster ${{ secrets.ECS_CLUSTER_STAGING }} \
+            --service ${{ secrets.ECS_SERVICE_STAGING }} \
+            --force-new-deployment
+          aws ecs wait services-stable \
+            --cluster ${{ secrets.ECS_CLUSTER_STAGING }} \
+            --services ${{ secrets.ECS_SERVICE_STAGING }}
+
+  deploy-production:
+    needs: deploy-staging
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ secrets.AWS_REGION }}
+      - name: Run migration (production)
+        run: |
+          TASK_ARN=$(aws ecs run-task \
+            --cluster ${{ secrets.ECS_CLUSTER_PROD }} \
+            --task-definition ${{ secrets.MIGRATION_TASK_DEFINITION }} \
+            --overrides '{"containerOverrides":[{"name":"api","command":["alembic","upgrade","head"]}]}' \
+            --launch-type FARGATE \
+            --query 'tasks[0].taskArn' --output text)
+          aws ecs wait tasks-stopped --cluster ${{ secrets.ECS_CLUSTER_PROD }} --tasks $TASK_ARN
+          EXIT=$(aws ecs describe-tasks --cluster ${{ secrets.ECS_CLUSTER_PROD }} --tasks $TASK_ARN \
+            --query 'tasks[0].containers[0].exitCode' --output text)
+          if [ "$EXIT" != "0" ]; then echo "Migration failed (exit $EXIT)"; exit 1; fi
+      - name: Deploy to production
+        run: |
+          aws ecs update-service \
+            --cluster ${{ secrets.ECS_CLUSTER_PROD }} \
+            --service ${{ secrets.ECS_SERVICE_PROD }} \
+            --force-new-deployment
+          aws ecs wait services-stable \
+            --cluster ${{ secrets.ECS_CLUSTER_PROD }} \
+            --services ${{ secrets.ECS_SERVICE_PROD }}
+
+  deploy-frontend:
+    needs: deploy-production
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: openapi
+          path: frontend/
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm run build
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ secrets.AWS_REGION }}
+      - run: aws s3 sync dist/ s3://${{ secrets.S3_FRONTEND_BUCKET_PROD }}/ --delete
+      - run: |
+          aws cloudfront create-invalidation \
+            --distribution-id ${{ secrets.CLOUDFRONT_DISTRIBUTION_ID_PROD }} \
+            --paths "/*"

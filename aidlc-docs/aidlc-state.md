@@ -30,7 +30,7 @@
 | Workflow Planning | COMPLETED | execution-plan.md generated |
 | Application Design | COMPLETED | 5 artifacts generated in inception/application-design/ |
 | Units Generation | COMPLETED | unit-of-work.md, unit-of-work-dependency.md, unit-of-work-story-map.md |
-| Unit 1 — Backend API & Data Layer | IN PROGRESS | Functional Design ✓, NFR Requirements ✓, NFR Design ✓, Infrastructure Design ✓; Code Generation next |
+| Unit 1 — Backend API & Data Layer | COMPLETED | All design stages + Code Generation complete |
 | Unit 2 — Balance Engine | PENDING | Functional Design + NFR Requirements + NFR Design + Code Generation |
 | Unit 3 — Frontend SPA | PENDING | Functional Design + Code Generation |
 | Build and Test | PENDING | EXECUTE |
