@@ -5,10 +5,10 @@ from sqlalchemy.orm import DeclarativeBase
 
 from core.config import settings
 
+_is_sqlite = settings.database_url.startswith("sqlite")
 engine = create_async_engine(
     settings.database_url,
-    pool_size=2,
-    max_overflow=8,
+    **({} if _is_sqlite else {"pool_size": 2, "max_overflow": 8}),
     pool_pre_ping=True,
     echo=False,
 )
@@ -22,4 +22,9 @@ class Base(DeclarativeBase):
 
 async def get_db() -> AsyncGenerator[AsyncSession, None]:
     async with AsyncSessionLocal() as session:
-        yield session
+        try:
+            yield session
+            await session.commit()
+        except Exception:
+            await session.rollback()
+            raise

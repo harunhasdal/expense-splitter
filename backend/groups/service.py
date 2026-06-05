@@ -3,6 +3,8 @@ from datetime import datetime, timezone
 
 import structlog
 from fastapi import HTTPException
+from sqlalchemy import select
+from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from auth import repository as user_repo
@@ -11,6 +13,14 @@ from groups import repository as group_repo
 from groups.models import Group, Member
 
 logger = structlog.get_logger()
+
+
+async def _load_group(db: AsyncSession, group_id: uuid.UUID) -> Group | None:
+    """Load a group with its members eagerly (avoids MissingGreenlet outside async context)."""
+    result = await db.execute(
+        select(Group).where(Group.id == group_id).options(selectinload(Group.members))
+    )
+    return result.scalar_one_or_none()
 
 
 async def _require_member(db: AsyncSession, group_id: uuid.UUID, user_id: uuid.UUID) -> Member:
@@ -28,16 +38,18 @@ async def _require_owner(group: Group, user_id: uuid.UUID) -> None:
 async def create_group(
     db: AsyncSession, owner: User, name: str, description: str | None
 ) -> Group:
-    async with db.begin():
-        group = await group_repo.create(db, owner.id, name, description)
-        await group_repo.add_member(db, group.id, owner)
+    group = await group_repo.create(db, owner.id, name, description)
+    await group_repo.add_member(db, group.id, owner)
+    await db.flush()
     logger.info("group_created", group_id=str(group.id), owner_id=str(owner.id))
-    return group
+    loaded = await _load_group(db, group.id)
+    assert loaded is not None
+    return loaded
 
 
 async def get_group(db: AsyncSession, group_id: uuid.UUID, user_id: uuid.UUID) -> Group:
     await _require_member(db, group_id, user_id)
-    group = await group_repo.get_by_id(db, group_id)
+    group = await _load_group(db, group_id)
     if not group:
         raise HTTPException(status_code=404, detail="Group not found")
     return group
@@ -46,7 +58,14 @@ async def get_group(db: AsyncSession, group_id: uuid.UUID, user_id: uuid.UUID) -
 async def list_groups(
     db: AsyncSession, user_id: uuid.UUID, include_archived: bool = False
 ) -> list[Group]:
-    return await group_repo.list_for_user(db, user_id, include_archived)
+    groups = await group_repo.list_for_user(db, user_id, include_archived)
+    # Re-load each group with members eagerly to avoid MissingGreenlet on serialization
+    loaded = []
+    for g in groups:
+        lg = await _load_group(db, g.id)
+        if lg:
+            loaded.append(lg)
+    return loaded
 
 
 async def archive_group(
@@ -65,13 +84,13 @@ async def archive_group(
     if has_nonzero and not force:
         raise HTTPException(status_code=409, detail="Group has unsettled balances")
 
-    async with db.begin():
-        await group_repo.update_group(
-            db, group,
-            archived_at=datetime.now(timezone.utc),
-            archived_by=user.id,
-            force_archived=has_nonzero and force,
-        )
+    await group_repo.update_group(
+        db, group,
+        archived_at=datetime.now(timezone.utc),
+        archived_by=user.id,
+        force_archived=has_nonzero and force,
+    )
+    await db.flush()
 
     if has_nonzero and force:
         logger.warning(
@@ -80,7 +99,9 @@ async def archive_group(
             actor_id=str(user.id),
             balances=str(balances),
         )
-    return group
+    loaded = await _load_group(db, group_id)
+    assert loaded is not None
+    return loaded
 
 
 async def add_member(
@@ -94,12 +115,12 @@ async def add_member(
     if await group_repo.member_email_exists(db, group_id, email):
         raise HTTPException(status_code=409, detail="User is already a member of this group")
 
-    async with db.begin():
-        target_user = await user_repo.get_by_email(db, email)
-        if target_user:
-            member = await group_repo.add_member(db, group_id, target_user)
-        else:
-            member = await group_repo.add_pending_member(db, group_id, email)
+    target_user = await user_repo.get_by_email(db, email)
+    if target_user:
+        member = await group_repo.add_member(db, group_id, target_user)
+    else:
+        member = await group_repo.add_pending_member(db, group_id, email)
+    await db.flush()
 
     logger.info("member_added", group_id=str(group_id), email=email)
     return member
@@ -129,7 +150,7 @@ async def remove_member(
     if member_has_balance:
         raise HTTPException(status_code=409, detail="Member has unsettled balance; settle before removing")
 
-    async with db.begin():
-        await group_repo.remove_member(db, member, requesting_user.id)
+    await group_repo.remove_member(db, member, requesting_user.id)
+    await db.flush()
 
     logger.info("member_removed", group_id=str(group_id), member_id=str(member_id))

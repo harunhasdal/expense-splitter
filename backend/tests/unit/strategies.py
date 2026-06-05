@@ -23,8 +23,14 @@ def monetary_amounts(draw: st.DrawFn) -> Decimal:
 
 @composite
 def member_id_list(draw: st.DrawFn, min_size: int = 1, max_size: int = 8) -> list[uuid.UUID]:
-    count = draw(st.integers(min_value=min_size, max_value=max_size))
-    return [uuid.UUID(int=draw(st.integers(min_value=0, max_value=2**128 - 1))) for _ in range(count)]
+    return draw(
+        st.lists(
+            st.uuids(),
+            min_size=min_size,
+            max_size=max_size,
+            unique=True,
+        )
+    )
 
 
 @composite

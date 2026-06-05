@@ -25,9 +25,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [isLoading, setIsLoading] = useState(true);
 
   const signOut = () => {
-    fetch('/auth/logout', { method: 'POST', credentials: 'include' }).catch(() => {});
+    fetch('/auth/logout', { method: 'POST', credentials: 'include' })
+      .then(res => {
+        // Backend redirects to Cognito logout — follow the redirect
+        if (res.redirected) window.location.href = res.url;
+        else window.location.href = '/signin';
+      })
+      .catch(() => { window.location.href = '/signin'; });
     setUser(null);
-    window.location.href = '/signin';
   };
 
   useEffect(() => {
@@ -38,8 +43,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       return;
     }
 
-    // Session exists — could fetch /auth/me here; for now derive from cookie presence
-    setIsLoading(false);
+    fetch('/auth/me', { credentials: 'include' })
+      .then(res => (res.ok ? res.json() : Promise.reject()))
+      .then((data: User) => setUser(data))
+      .catch(() => setUser(null))
+      .finally(() => setIsLoading(false));
   }, []);
 
   return (

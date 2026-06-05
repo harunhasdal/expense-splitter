@@ -16,27 +16,15 @@ export default function SignInPage() {
         <p style={{ margin: '0 0 2rem', color: '#666' }}>Sign in to continue</p>
 
         <a
-          href="/auth/google/login"
-          data-testid="signin-google-button"
-          style={{
-            display: 'block', padding: '0.75rem', marginBottom: '0.75rem',
-            border: '1px solid #dadce0', borderRadius: 6, textDecoration: 'none',
-            color: '#3c4043', fontWeight: 500,
-          }}
-        >
-          Continue with Google
-        </a>
-
-        <a
-          href="/auth/github/login"
-          data-testid="signin-github-button"
+          href="/auth/login"
+          data-testid="signin-button"
           style={{
             display: 'block', padding: '0.75rem',
-            border: '1px solid #dadce0', borderRadius: 6, textDecoration: 'none',
-            color: '#3c4043', fontWeight: 500,
+            background: '#0066cc', borderRadius: 6, textDecoration: 'none',
+            color: '#fff', fontWeight: 500,
           }}
         >
-          Continue with GitHub
+          Sign in
         </a>
       </div>
     </div>

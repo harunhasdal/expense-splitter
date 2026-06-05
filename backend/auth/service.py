@@ -1,33 +1,20 @@
 import secrets
-from datetime import datetime, timezone
+import time
+from functools import lru_cache
+from typing import Any
 
 import httpx
 import structlog
 from itsdangerous import URLSafeTimedSerializer
-from jose import JWTError, jwt
+from jose import JWTError, jwk, jwt
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from auth.models import User
-from auth.repository import OAuthProfile, upsert_oauth_user
+from auth.repository import CognitoProfile, upsert_cognito_user
 from core.config import settings
 from groups.repository import link_pending_members
 
 logger = structlog.get_logger()
-
-PROVIDER_CONFIGS = {
-    "google": {
-        "auth_url": "https://accounts.google.com/o/oauth2/v2/auth",
-        "token_url": "https://oauth2.googleapis.com/token",
-        "userinfo_url": "https://www.googleapis.com/oauth2/v3/userinfo",
-        "scopes": "openid email profile",
-    },
-    "github": {
-        "auth_url": "https://github.com/login/oauth/authorize",
-        "token_url": "https://github.com/login/oauth/access_token",
-        "userinfo_url": "https://api.github.com/user",
-        "scopes": "read:user user:email",
-    },
-}
 
 
 def _get_serializer() -> URLSafeTimedSerializer:
@@ -49,115 +36,112 @@ def validate_state(raw_state: str, cookie_value: str) -> bool:
         return False
 
 
-def get_authorization_url(provider: str, state: str) -> str:
-    cfg = PROVIDER_CONFIGS[provider]
-    client_id = (
-        settings.google_client_id if provider == "google" else settings.github_client_id
-    )
-    redirect_uri = f"{settings.app_base_url}/auth/{provider}/callback"
+def get_authorization_url(state: str) -> str:
+    redirect_uri = f"{settings.app_base_url}/auth/callback"
     return (
-        f"{cfg['auth_url']}?response_type=code&client_id={client_id}"
-        f"&redirect_uri={redirect_uri}&scope={cfg['scopes']}&state={state}"
+        f"{settings.cognito_base_url}/oauth2/authorize"
+        f"?response_type=code"
+        f"&client_id={settings.cognito_client_id}"
+        f"&redirect_uri={redirect_uri}"
+        f"&scope=openid+email+profile"
+        f"&state={state}"
     )
 
 
-async def _exchange_code(provider: str, code: str) -> str:
-    cfg = PROVIDER_CONFIGS[provider]
-    client_id = settings.google_client_id if provider == "google" else settings.github_client_id
-    client_secret = (
-        settings.google_client_secret if provider == "google" else settings.github_client_secret
-    ).get_secret_value()
-    redirect_uri = f"{settings.app_base_url}/auth/{provider}/callback"
+def get_logout_url() -> str:
+    redirect_uri = f"{settings.app_base_url}/auth/logout-callback"
+    return (
+        f"{settings.cognito_base_url}/logout"
+        f"?client_id={settings.cognito_client_id}"
+        f"&logout_uri={redirect_uri}"
+    )
 
+
+async def _exchange_code(code: str) -> dict[str, Any]:
+    redirect_uri = f"{settings.app_base_url}/auth/callback"
     async with httpx.AsyncClient() as client:
         resp = await client.post(
-            cfg["token_url"],
+            f"{settings.cognito_base_url}/oauth2/token",
             data={
                 "grant_type": "authorization_code",
                 "code": code,
-                "client_id": client_id,
-                "client_secret": client_secret,
                 "redirect_uri": redirect_uri,
+                "client_id": settings.cognito_client_id,
             },
-            headers={"Accept": "application/json"},
+            auth=(
+                settings.cognito_client_id,
+                settings.cognito_client_secret.get_secret_value(),
+            ),
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
         )
         resp.raise_for_status()
-        return resp.json()["access_token"]
+        return dict(resp.json())
 
 
-async def _fetch_profile(provider: str, access_token: str) -> OAuthProfile:
-    cfg = PROVIDER_CONFIGS[provider]
-    async with httpx.AsyncClient() as client:
-        resp = await client.get(
-            cfg["userinfo_url"],
-            headers={"Authorization": f"Bearer {access_token}", "Accept": "application/json"},
+# Cache JWKS for 1 hour — avoid fetching on every request
+_jwks_cache: dict[str, Any] = {}
+_jwks_fetched_at: float = 0.0
+_JWKS_TTL = 3600.0
+
+
+async def _get_jwks() -> dict[str, Any]:
+    global _jwks_cache, _jwks_fetched_at
+    if not _jwks_cache or (time.monotonic() - _jwks_fetched_at) > _JWKS_TTL:
+        async with httpx.AsyncClient() as client:
+            resp = await client.get(settings.cognito_jwks_url)
+            resp.raise_for_status()
+            _jwks_cache = dict(resp.json())
+            _jwks_fetched_at = time.monotonic()
+    return _jwks_cache
+
+
+async def validate_token(id_token: str) -> dict[str, Any]:
+    """Validate a Cognito ID token. Returns the decoded claims."""
+    jwks = await _get_jwks()
+    try:
+        claims: dict[str, Any] = jwt.decode(
+            id_token,
+            jwks,
+            algorithms=["RS256"],
+            audience=settings.cognito_client_id,
+            issuer=settings.cognito_issuer,
         )
-        resp.raise_for_status()
-        data = resp.json()
-
-    if provider == "google":
-        return OAuthProfile(
-            email=data["email"],
-            display_name=data.get("name", data["email"]),
-            avatar_url=data.get("picture"),
-            provider="google",
-            provider_id=data["sub"],
-        )
-    else:
-        email = data.get("email") or f"{data['login']}@users.noreply.github.com"
-        return OAuthProfile(
-            email=email,
-            display_name=data.get("name") or data["login"],
-            avatar_url=data.get("avatar_url"),
-            provider="github",
-            provider_id=str(data["id"]),
-        )
+    except JWTError as e:
+        raise ValueError("Invalid token") from e
+    if claims.get("token_use") != "id":
+        raise ValueError("Not an ID token")
+    return claims
 
 
-def issue_jwt(user: User) -> str:
-    now = int(datetime.now(timezone.utc).timestamp())
-    payload = {
-        "sub": str(user.id),
-        "email": user.email,
-        "iat": now,
-        "exp": now + settings.jwt_expiry_seconds,
-        "iss": settings.jwt_issuer,
-        "aud": settings.jwt_issuer,
-    }
-    return jwt.encode(
-        payload,
-        settings.jwt_private_key.get_secret_value(),
-        algorithm="RS256",
-    )
+def _extract_display_name(claims: dict[str, Any]) -> str:
+    name = claims.get("name") or claims.get("cognito:username") or ""
+    if not name:
+        email: str = claims.get("email", "")
+        name = email.split("@")[0]
+    return str(name)
 
 
 async def handle_callback(
-    db: AsyncSession, provider: str, code: str, state: str, state_cookie: str
+    db: AsyncSession, code: str, state: str, state_cookie: str
 ) -> tuple[User, str]:
     if not validate_state(state, state_cookie):
         raise ValueError("Invalid OAuth2 state parameter")
 
-    access_token = await _exchange_code(provider, code)
-    profile = await _fetch_profile(provider, access_token)
+    tokens = await _exchange_code(code)
+    id_token: str = tokens["id_token"]
+    claims = await validate_token(id_token)
 
-    async with db.begin():
-        user, is_new = await upsert_oauth_user(db, profile)
-        if is_new:
-            await link_pending_members(db, user)
+    profile = CognitoProfile(
+        cognito_sub=str(claims["sub"]),
+        email=str(claims["email"]),
+        display_name=_extract_display_name(claims),
+        avatar_url=claims.get("picture"),
+    )
 
-    token = issue_jwt(user)
-    logger.info("user_signed_in", user_id=str(user.id), provider=provider, is_new=is_new)
-    return user, token
+    user, is_new = await upsert_cognito_user(db, profile)
+    if is_new:
+        await link_pending_members(db, user)
+    await db.flush()
 
-
-async def validate_token(token: str) -> dict[str, object]:
-    try:
-        return jwt.decode(
-            token,
-            settings.jwt_public_key,
-            algorithms=["RS256"],
-            audience=settings.jwt_issuer,
-            issuer=settings.jwt_issuer,
-        )
-    except JWTError as e:
-        raise ValueError("Invalid token") from e
+    logger.info("user_signed_in", user_id=str(user.id), sub=profile.cognito_sub, is_new=is_new)
+    return user, id_token

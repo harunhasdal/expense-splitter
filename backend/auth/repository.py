@@ -4,7 +4,6 @@ from datetime import datetime, timezone
 
 import structlog
 from sqlalchemy import select, update
-from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from auth.models import User
@@ -13,12 +12,11 @@ logger = structlog.get_logger()
 
 
 @dataclass
-class OAuthProfile:
+class CognitoProfile:
+    cognito_sub: str
     email: str
     display_name: str
     avatar_url: str | None
-    provider: str
-    provider_id: str
 
 
 async def get_by_id(db: AsyncSession, user_id: uuid.UUID) -> User | None:
@@ -31,15 +29,12 @@ async def get_by_email(db: AsyncSession, email: str) -> User | None:
     return result.scalar_one_or_none()
 
 
-async def upsert_oauth_user(db: AsyncSession, profile: OAuthProfile) -> tuple[User, bool]:
-    """Returns (user, is_new). is_new=True when created for the first time."""
+async def upsert_cognito_user(db: AsyncSession, profile: CognitoProfile) -> tuple[User, bool]:
+    """Upsert by cognito_sub. Returns (user, is_new)."""
     now = datetime.now(timezone.utc)
     email = profile.email.lower()
 
-    # Check by provider identity first
-    result = await db.execute(
-        select(User).where(User.provider == profile.provider, User.provider_id == profile.provider_id)
-    )
+    result = await db.execute(select(User).where(User.cognito_sub == profile.cognito_sub))
     user = result.scalar_one_or_none()
 
     if user:
@@ -55,15 +50,14 @@ async def upsert_oauth_user(db: AsyncSession, profile: OAuthProfile) -> tuple[Us
         await db.refresh(user)
         return user, False
 
-    # Check by email (different provider, same person)
+    # New user — also check email to avoid duplicates if sub changes (rare edge case)
     existing = await get_by_email(db, email)
     if existing:
         await db.execute(
             update(User)
             .where(User.id == existing.id)
             .values(
-                provider=profile.provider,
-                provider_id=profile.provider_id,
+                cognito_sub=profile.cognito_sub,
                 display_name=profile.display_name,
                 avatar_url=profile.avatar_url,
                 last_sign_in_at=now,
@@ -72,13 +66,11 @@ async def upsert_oauth_user(db: AsyncSession, profile: OAuthProfile) -> tuple[Us
         await db.refresh(existing)
         return existing, False
 
-    # New user
     new_user = User(
+        cognito_sub=profile.cognito_sub,
         email=email,
         display_name=profile.display_name,
         avatar_url=profile.avatar_url,
-        provider=profile.provider,
-        provider_id=profile.provider_id,
         created_at=now,
         last_sign_in_at=now,
     )

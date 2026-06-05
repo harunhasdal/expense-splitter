@@ -8,7 +8,7 @@ from auth.middleware import get_current_user
 from auth.models import User
 from core.db import get_db
 from expenses import service as expense_service
-from expenses.schemas import ExpensePage, ExpenseResponse
+from expenses.schemas import ExpenseCreate, ExpensePage, ExpenseResponse
 
 router = APIRouter()
 
@@ -16,11 +16,10 @@ router = APIRouter()
 @router.post("/{group_id}/expenses", response_model=ExpenseResponse, status_code=201)
 async def create_expense(
     group_id: uuid.UUID,
-    body: "expenses.schemas.ExpenseCreate",
+    body: ExpenseCreate,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> ExpenseResponse:
-    from expenses.schemas import ExpenseCreate
     expense = await expense_service.create_expense(db, group_id, current_user, body)
     return ExpenseResponse.model_validate(expense)
 

@@ -27,16 +27,16 @@ async def create_settlement(
     if not payee or payee.group_id != group_id or payee.removed_at is not None:
         raise HTTPException(status_code=400, detail="Payee must be an active group member")
 
-    async with db.begin():
-        settlement = await settlement_repo.create(
-            db,
-            group_id=group_id,
-            payer_id=payload.payer_id,
-            payee_id=payload.payee_id,
-            amount=payload.amount,
-            currency=payload.currency,
-            recorded_by=user.id,
-        )
+    settlement = await settlement_repo.create(
+        db,
+        group_id=group_id,
+        payer_id=payload.payer_id,
+        payee_id=payload.payee_id,
+        amount=payload.amount,
+        currency=payload.currency,
+        recorded_by=user.id,
+    )
+    await db.flush()
 
     logger.info("settlement_recorded", settlement_id=str(settlement.id), group_id=str(group_id))
     return settlement

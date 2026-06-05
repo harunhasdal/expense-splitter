@@ -19,12 +19,28 @@ async def get_current_user(
     if not session_token:
         raise HTTPException(status_code=401, detail="Authentication required")
     try:
-        payload = await auth_service.validate_token(session_token)
-        user_id = uuid.UUID(str(payload["sub"]))
+        claims = await auth_service.validate_token(session_token)
+        user_id_str = str(claims.get("custom:app_user_id", ""))
+        # Fall back to lookup by cognito_sub when app_user_id claim is absent
+        cognito_sub = str(claims["sub"])
     except (ValueError, KeyError):
         raise HTTPException(status_code=401, detail="Authentication required")
 
-    user = await user_repo.get_by_id(db, user_id)
+    user: User | None = None
+    if user_id_str:
+        try:
+            user = await user_repo.get_by_id(db, uuid.UUID(user_id_str))
+        except ValueError:
+            pass
+
+    if not user:
+        from sqlalchemy import select
+        from core.db import AsyncSessionLocal
+        result = await db.execute(
+            select(User).where(User.cognito_sub == cognito_sub)
+        )
+        user = result.scalar_one_or_none()
+
     if not user:
         raise HTTPException(status_code=401, detail="Authentication required")
 

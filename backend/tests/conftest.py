@@ -36,10 +36,9 @@ def make_test_user(
 ) -> User:
     return User(
         id=uuid.uuid4(),
+        cognito_sub=str(uuid.uuid4()),
         email=email,
         display_name=display_name,
-        provider="google",
-        provider_id=str(uuid.uuid4()),
     )
 
 
@@ -58,11 +57,20 @@ async def auth_client(db_session: AsyncSession) -> AsyncGenerator[tuple[AsyncCli
         return user
 
     from auth.middleware import get_current_user
+    from itsdangerous import URLSafeTimedSerializer
+    from core.config import settings
+
     app.dependency_overrides[get_db] = override_db
     app.dependency_overrides[get_current_user] = override_current_user
 
+    # Build a valid CSRF double-submit pair so all mutation requests pass CSRFMiddleware
+    csrf_token = URLSafeTimedSerializer(settings.csrf_secret_key.get_secret_value()).dumps("test")
+
     async with AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
+        transport=ASGITransport(app=app),
+        base_url="http://test",
+        cookies={"csrf_token": csrf_token},
+        headers={"X-CSRF-Token": csrf_token},
     ) as client:
         yield client, user
 

@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 from decimal import Decimal
 
 from sqlalchemy import func, select
+from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from expenses.models import Expense, ExpenseSplit
@@ -50,11 +51,17 @@ async def create(
         )
         db.add(split)
     await db.flush()
-    return expense
+    # Reload with splits to avoid MissingGreenlet on serialization
+    loaded = await db.execute(
+        select(Expense).where(Expense.id == expense.id).options(selectinload(Expense.splits))
+    )
+    return loaded.scalar_one()
 
 
 async def get_by_id(db: AsyncSession, expense_id: uuid.UUID) -> Expense | None:
-    result = await db.execute(select(Expense).where(Expense.id == expense_id))
+    result = await db.execute(
+        select(Expense).where(Expense.id == expense_id).options(selectinload(Expense.splits))
+    )
     return result.scalar_one_or_none()
 
 
@@ -76,7 +83,7 @@ async def list_for_group(
     count_result = await db.execute(select(func.count()).select_from(stmt.subquery()))
     total = count_result.scalar_one()
 
-    stmt = stmt.offset((page - 1) * page_size).limit(page_size)
+    stmt = stmt.offset((page - 1) * page_size).limit(page_size).options(selectinload(Expense.splits))
     result = await db.execute(stmt)
     return list(result.scalars().all()), total
 
@@ -92,7 +99,9 @@ async def archive(
 
 async def get_all_for_balance(db: AsyncSession, group_id: uuid.UUID) -> list[ExpenseRecord]:
     result = await db.execute(
-        select(Expense).where(Expense.group_id == group_id, Expense.archived_at.is_(None))
+        select(Expense)
+        .where(Expense.group_id == group_id, Expense.archived_at.is_(None))
+        .options(selectinload(Expense.splits))
     )
     records = []
     for expense in result.scalars().all():

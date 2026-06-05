@@ -64,19 +64,19 @@ async def create_expense(
         (s.member_id, s.raw_value, s.computed_amount) for s in shares
     ]
 
-    async with db.begin():
-        expense = await expense_repo.create(
-            db,
-            group_id=group_id,
-            payer_id=payload.payer_id,
-            description=payload.description,
-            amount=payload.amount,
-            currency=payload.currency,
-            expense_date=payload.expense_date,
-            split_type=payload.split_type,
-            created_by=user.id,
-            shares=share_tuples,
-        )
+    expense = await expense_repo.create(
+        db,
+        group_id=group_id,
+        payer_id=payload.payer_id,
+        description=payload.description,
+        amount=payload.amount,
+        currency=payload.currency,
+        expense_date=payload.expense_date,
+        split_type=payload.split_type,
+        created_by=user.id,
+        shares=share_tuples,
+    )
+    await db.flush()
 
     logger.info("expense_created", expense_id=str(expense.id), group_id=str(group_id), actor=str(user.id))
     return expense
@@ -123,8 +123,8 @@ async def archive_expense(
     if expense.archived_at is not None:
         raise HTTPException(status_code=409, detail="Expense already archived")
 
-    async with db.begin():
-        await expense_repo.archive(db, expense, user.id)
+    await expense_repo.archive(db, expense, user.id)
+    await db.flush()
 
     logger.info(
         "expense_archived",

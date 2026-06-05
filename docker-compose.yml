@@ -18,8 +18,8 @@ services:
   api:
     build:
       context: ./backend
-      target: runtime
-    command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+      target: dev
+    command: sh -c "uv sync --frozen && uv run alembic -c migrations/alembic.ini upgrade head && uv run uvicorn main:app --host 0.0.0.0 --port 8000 --reload"
     env_file: .env
     environment:
       DATABASE_URL: postgresql+asyncpg://dev:dev@db:5432/expense_splitter

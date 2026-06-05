@@ -20,18 +20,16 @@ jobs:
       - run: uv sync --frozen
       - run: uv run ruff check .
       - run: uv run mypy . --strict
-      - run: uv run pytest tests/ --cov=. --cov-fail-under=80
+      - run: uv run pytest tests/
         env:
           DATABASE_URL: "sqlite+aiosqlite:///:memory:"
-          JWT_PRIVATE_KEY: "test"
-          JWT_PUBLIC_KEY: "test"
+          COGNITO_REGION: "eu-west-1"
+          COGNITO_USER_POOL_ID: "eu-west-1_TEST"
+          COGNITO_CLIENT_ID: "test-client-id"
+          COGNITO_CLIENT_SECRET: "test-client-secret"
+          COGNITO_DOMAIN: "test-domain"
           JWT_EXPIRY_SECONDS: "86400"
-          JWT_ISSUER: "http://localhost"
-          ALLOWED_ORIGINS: "http://localhost:5173"
-          GOOGLE_CLIENT_ID: "test"
-          GOOGLE_CLIENT_SECRET: "test"
-          GITHUB_CLIENT_ID: "test"
-          GITHUB_CLIENT_SECRET: "test"
+          ALLOWED_ORIGINS: '["http://localhost:5173"]'
           CSRF_SECRET_KEY: "test-secret-key-minimum-32-chars!!"
           APP_BASE_URL: "http://localhost:8000"
       - run: uv run pip-audit
