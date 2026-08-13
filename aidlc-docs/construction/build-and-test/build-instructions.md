@@ -38,10 +38,10 @@ Copy `backend/.env.example` to `backend/.env` and fill in:
 
 ```bash
 cd backend
-uv sync --frozen
+uv sync --frozen --extra dev
 ```
 
-> `uv sync` creates a `.venv` and installs all pinned deps from `pyproject.toml`. The `--frozen` flag ensures exact reproducibility.
+> `uv sync` creates a `.venv` and installs all pinned deps from `pyproject.toml`. The `--frozen` flag ensures exact reproducibility. The `--extra dev` flag pulls in `pytest`, `ruff`, `mypy`, and other tools required to run tests and lints (declared under `[project.optional-dependencies]`); omit it for a runtime-only install.
 
 #### 2. Verify Installation
 

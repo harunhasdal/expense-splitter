@@ -17,7 +17,6 @@ export default function SplitTypeSelector({
   totalAmount, onChange, onMemberToggle,
 }: SplitTypeSelectorProps) {
   const total = parseFloat(totalAmount) || 0;
-  const selectedMembers = members.filter((m) => selectedMemberIds.includes(m.id));
 
   const updateDetail = (memberId: string, value: string) => {
     const updated = splitDetails.map((d) =>

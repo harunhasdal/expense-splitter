@@ -8,7 +8,7 @@
 ## Workspace State
 - **Existing Code**: No
 - **Reverse Engineering Needed**: No
-- **Workspace Root**: /Users/hhasdal/code/demos/ai-dlc-projects/aidlc-with-claude
+- **Workspace Root**: /Users/hhasdal/projects/demos/ai-dlc-projects/aidlc-with-claude
 
 ## Code Location Rules
 - **Application Code**: Workspace root (NEVER in aidlc-docs/)
