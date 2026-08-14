@@ -33,11 +33,11 @@ jobs:
           import json, os
           os.environ.update({
             'DATABASE_URL': 'sqlite+aiosqlite:///:memory:',
-            'JWT_PRIVATE_KEY': 'test', 'JWT_PUBLIC_KEY': 'test',
-            'JWT_EXPIRY_SECONDS': '86400', 'JWT_ISSUER': 'http://localhost',
-            'ALLOWED_ORIGINS': 'http://localhost', 'GOOGLE_CLIENT_ID': 'test',
-            'GOOGLE_CLIENT_SECRET': 'test', 'GITHUB_CLIENT_ID': 'test',
-            'GITHUB_CLIENT_SECRET': 'test', 'CSRF_SECRET_KEY': 'test-32-chars!!!!!!!!!!!!!!!!',
+            'COGNITO_REGION': 'eu-west-1', 'COGNITO_USER_POOL_ID': 'eu-west-1_TEST',
+            'COGNITO_CLIENT_ID': 'test-client-id', 'COGNITO_CLIENT_SECRET': 'test-client-secret',
+            'COGNITO_DOMAIN': 'test-domain', 'JWT_EXPIRY_SECONDS': '86400',
+            'ALLOWED_ORIGINS': '[\"http://localhost\"]',
+            'CSRF_SECRET_KEY': 'test-secret-key-minimum-32-chars!!',
             'APP_BASE_URL': 'http://localhost',
           })
           from main import app; print(json.dumps(app.openapi()))
