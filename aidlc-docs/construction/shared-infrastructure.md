@@ -93,7 +93,7 @@ cdk/
 
 | Secret | Description |
 |---|---|
-| `AWS_ROLE_ARN` | GitHub Actions OIDC role ARN (`githubActionsRole`) |
+| `AWS_ROLE_ARN` | GitHub Actions OIDC role ARN (role `GithubActionsRole`); the full ARN (incl. account ID) is stored only in the repo secret, never in these docs |
 | `AWS_REGION` | `eu-west-1` |
 | `ECR_REGISTRY` | ECR registry URL |
 | `CLOUDFRONT_DISTRIBUTION_ID_PROD` | CloudFront distribution ID for cache invalidation |

@@ -178,4 +178,4 @@ Secret rotation: manual (no automated rotation in v1 — documented as future en
 |---|---|
 | `ecsTaskExecutionRole` | `ecr:GetAuthorizationToken`, `ecr:BatchGetImage`, `ecr:GetDownloadUrlForLayer`, `logs:CreateLogGroup`, `logs:CreateLogStream`, `logs:PutLogEvents` |
 | `ecsTaskRole` | `secretsmanager:GetSecretValue` on `expense-splitter/{env}/api` ARN; `logs:CreateLogStream`, `logs:PutLogEvents` on `/ecs/expense-splitter-api-{env}` ARN — no wildcards (SECURITY-06) |
-| `githubActionsRole` | `ecr:*` on repository ARN; `ecs:RegisterTaskDefinition`, `ecs:UpdateService`, `ecs:RunTask`, `ecs:DescribeTasks`; `iam:PassRole` on Task roles — scoped to specific ARNs |
+| `GithubActionsRole` | `ecr:*` on repository ARN; `ecs:RegisterTaskDefinition`, `ecs:UpdateService`, `ecs:RunTask`, `ecs:DescribeTasks`; `iam:PassRole` on Task roles — scoped to specific ARNs |

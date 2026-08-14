@@ -114,7 +114,7 @@ export class ApplicationStack extends Stack {
   // RDS Instance
   // Secrets Manager secrets (manual values — not auto-generated)
   // CloudWatch Log Groups + Alarms + SNS Topic
-  // IAM Roles (ecsTaskExecutionRole, ecsTaskRole, githubActionsRole)
+  // IAM Roles (ecsTaskExecutionRole, ecsTaskRole, GithubActionsRole)
   // S3 bucket for ALB logs
 }
 ```
