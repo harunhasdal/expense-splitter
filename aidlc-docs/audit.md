@@ -230,3 +230,51 @@
 **State Updated**: Build and Test → COMPLETED in aidlc-state.md
 
 ---
+
+## Operations — ECS Express Mode Deployment Implementation
+**Timestamp**: 2026-08-14T00:00:00Z
+**User Input**: "resume"
+**AI Response**: Resumed in-progress infrastructure work implementing the committed ECS Express Mode design (express-mode-deployment.md). Confirmed the uncommitted CDK rewrite (ecr-stack.ts, application-stack.ts around AWS::ECS::ExpressGatewayService, two-env bin, SSM-based cognito config, network-stack cleanup) synthesizes clean — the prior REPLACE_ME synth blocker is resolved. Verified two Express-Mode facts against AWS docs: BYO task def requires a container named `Main` with one named TCP port; Express services are updated via `update-express-gateway-service`, not `update-service`.
+**Context**: Post-workflow Operations — Express Mode deployment implementation.
+
+---
+
+## Operations — deploy.yml Rollout Decision
+**Timestamp**: 2026-08-14T00:01:00Z
+**User Input**: [AskUserQuestion] Rollout model = "cdk deploy driven (Recommended)"
+**AI Response**: Reworked deploy.yml (§10) to the cdk-deploy-driven model: build+push image, then `cdk deploy ApplicationStack-<env> --exclusively --context imageTag=<sha> --outputs-file`, then migration `run-task` against the exact deployed revision (container `Main`, private subnets + ECS SG). Extracted the shared backend deploy into a `.github/actions/deploy-backend` composite action used by staging + prod. Added MigrationSubnetIds + EcsSecurityGroupId CfnOutputs to ApplicationStack. Dropped ECS_CLUSTER_*/ECS_SERVICE_*/MIGRATION_TASK_DEFINITION secrets (now derived from cdk outputs). Updated design doc §6/§10 + status to match. Both YAML files parse; all 9 stacks synth clean.
+**Context**: Post-workflow Operations — CI/CD rework complete.
+
+---
+
+## Operations — GitHub Config Verification & Setup
+**Timestamp**: 2026-08-14T00:02:00Z
+**User Input**: "Doublecheck if GithubActionsRole exist... Use gh cli to check AWS_ROLE_ARN variable is set." / "Check the other variables as well. They don't need to be secrets. Create them if they are missing"
+**AI Response**: Verified (read-only): `sts get-caller-identity` = account 085520064831 (Admin/Isengard, dev). `GithubActionsRole` exists (arn:aws:iam::085520064831:role/GithubActionsRole). `AWS_ROLE_ARN` is set as a repo **secret** (kept as secret — masks account ID). Created three repo **variables** (harunhasdal/expense-splitter): `AWS_REGION=eu-west-1`, `ECR_REGISTRY=085520064831.dkr.ecr.eu-west-1.amazonaws.com`, `S3_FRONTEND_BUCKET_PROD=expense-splitter-frontend-prod`. Updated deploy.yml to read these from `vars.*` (kept `AWS_ROLE_ARN` in `secrets.*`). `CLOUDFRONT_DISTRIBUTION_ID_PROD` NOT created — the distribution does not exist until FrontendStack-prod is deployed; must be set post-deploy from the stack's DistributionId output. Updated design doc §10 config table.
+**Context**: Post-workflow Operations — CI/CD config bootstrap (expense-splitter stacks not yet deployed).
+
+---
+
+## Operations — First Deployment (Phase 1 Bootstrap, staging)
+**Timestamp**: 2026-08-14T00:03:00Z
+**User Input**: "OK, let's prepare for our first deployment, via the github actions" + [AskUserQuestion] bootstrap path = "I bootstrap locally now"; env scope = "staging only"; Google login = "Make Google optional".
+**AI Response**: Ran the local phase-1 bootstrap for staging. Deployed `EcrStack` (CREATE_COMPLETE). Built + pushed the runtime image (`--target runtime --platform linux/amd64`) to ECR as `:bootstrap` (digest e478e6cb…). Deployed `NetworkStack-staging`, `CognitoStack-staging`, `FrontendStack-staging` (all CREATE_COMPLETE). Captured outputs — Cognito UserPoolId=eu-west-1_UEMos4m0m, ClientId=7ss5gf0o1sbsv4t1aba3kcp752, domain expense-splitter-staging.auth.eu-west-1.amazoncognito.com; Frontend DistributionId=E1H1ALO1O9DQ91, domain d3qsuesb689oq9.cloudfront.net. **Found a runbook gap**: the Express service's `/health` hits the DB and its task reads JSON keys from an empty secret shell, so a single-pass `ApplicationStack` deploy can't stabilize Express (secret invalid + RDS unreachable → 503 → canary rollback). **Fix**: added a `deployExpress` CDK context flag (default true) to `application-stack.ts` gating the `CfnResource` + `ApiEndpoint` output. Deployed `ApplicationStack-staging` pass 1 with `-c deployExpress=false` (RDS + secret shell + task def, no service). Updated design doc §11 with the corrected bootstrap order. Next: populate the api secret, redeploy with Express, capture domain, phase-2 rewire, run migration.
+**Context**: Post-workflow Operations — first deployment, phase-1 local bootstrap (staging only).
+
+---
+
+## Operations — First Deployment (Phase 2 + Migration Complete, staging)
+**Timestamp**: 2026-08-14T00:04:00Z
+**User Input**: N/A (continuation of the phase-1 bootstrap request; background-task notifications only, no new user input)
+**AI Response**: Populated the `expense-splitter/staging/api` secret out-of-band (database_url assembled from the CDK-managed DatabaseSecret physical ARN with URL-encoding, cognito_client_secret from the Cognito app-client, csrf_secret_key generated). **Fixed a broken image**: Express tasks were crashing with `exec /app/.venv/bin/gunicorn: no such file or directory` because the host macOS `.venv` clobbered the builder's Linux venv during `COPY . .` — root cause was a missing `.venv/` exclusion in `backend/.dockerignore`. Added `.venv/`, `.git/`, `.gitignore` to `.dockerignore` and set `ENV UV_PYTHON_PREFERENCE=only-system` in the builder + dev Dockerfile stages so the venv binds to the base-image system Python (present in the runtime stage). Rebuilt `--no-cache`, verified gunicorn 22.0.0 runs, redeployed with Express (default `deployExpress=true`). Express service stabilized. **Ran the DB migration** as a one-off ECS run-task against `expense-splitter-api-staging:2` (container `Main`, private subnets, ECS SG, `assignPublicIp=DISABLED`) with override `["sh","-c","PYTHONPATH=/app alembic -c migrations/alembic.ini upgrade head"]` — fixed from a bare `alembic upgrade head` which fails (no `/app/alembic.ini`; script_location resolves via `-c migrations/alembic.ini`). Verified: **Main** container exit `0` (initial reading mistakenly showed the injected `aws-guardduty-agent` runtime-monitoring sidecar at `containers[0]`); CloudWatch log `Running upgrade -> a7f6a4fe33b1, initial_schema`. Also fixed the same alembic invocation + PYTHONPATH in `.github/actions/deploy-backend/action.yml` for CI parity. **Staging API live**: https://ex-28d804a97f3d4de9b0eb3f7f47b01478.ecs.eu-west-1.on.aws/health → 200 `{"status":"ok","db":"ok"}`. Uncommitted CDK/backend/CI changes remain (awaiting user go-ahead to commit and to enable the GitHub Actions pipeline).
+**Context**: Post-workflow Operations — first deployment complete for staging (phase 1 + phase 2 + migration). Backend API healthy end-to-end.
+
+---
+
+## Operations — Enable CI Pipeline (staging-only gate) + Commit
+**Timestamp**: 2026-08-15T00:00:00Z
+**User Input**: "yes" (approving: commit the bootstrap changes + wire up the pipeline for the first CI rollout)
+**AI Response**: Gated the `deploy-production` and `deploy-frontend` jobs in `.github/workflows/deploy.yml` behind `if: vars.ENABLE_PROD == 'true'` — prod is not bootstrapped (fresh RDS + empty api secret can't stabilize Express in one CI pass, and `CLOUDFRONT_DISTRIBUTION_ID_PROD` doesn't exist yet), so an ungated push to `main` would fail the run. With the gate unset, a push to `main` rolls out **staging only** (`build-and-push` → `deploy-staging`, both prod jobs skip). Documented the `ENABLE_PROD` variable in design doc §10 config table. Validated both YAML files parse. Committed all uncommitted bootstrap work on branch `expense-splitter` (CDK `deployExpress` flag + ecr-stack, Dockerfile/.dockerignore image fix, deploy-backend composite action alembic fix, design-doc + audit updates). The first CI-driven rollout triggers when this branch lands on `main`.
+**Context**: Post-workflow Operations — CI pipeline enabled for staging steady-state; prod deferred behind ENABLE_PROD.
+
+---

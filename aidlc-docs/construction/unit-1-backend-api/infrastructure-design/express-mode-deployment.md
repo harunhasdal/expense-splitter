@@ -1,6 +1,6 @@
 # Deployment Design — ECS Express Mode (Revision)
 
-**Status**: Proposed for review — not yet implemented
+**Status**: Implemented (2026-08-14) — CDK stacks synth clean; `deploy.yml` reworked to the cdk-deploy-driven rollout (§10). The external OIDC deploy role and the phase-1/phase-2 bootstrap (§11) remain operational steps.
 **Supersedes**: The ECS/ALB portions of `deployment-architecture.md` (backend compute only; the CloudFront/S3 frontend design there is unchanged and already implemented in `frontend-stack.ts`).
 **Date**: 2026-08-14
 
@@ -154,7 +154,7 @@ new ecs.CfnExpressGatewayService(this, 'ApiExpress', {
 ### `bin/expense-splitter.ts`
 
 - Instantiate **both** `staging` and `prod` (currently only one env, defaulting to `prod`) — `deploy.yml` has separate staging + prod jobs.
-- Replace `REPLACE_ME` placeholders (`appBaseUrl`, `googleClientId`, `googleClientSecretArn`); see §8 open decisions. **`cdk synth` currently fails** because `fromSecretCompleteArn('REPLACE_ME')` rejects the invalid ARN.
+- The old `REPLACE_ME` placeholders (`appBaseUrl`, `googleClientId`, `googleClientSecretArn`) that made `cdk synth` fail via `fromSecretCompleteArn('REPLACE_ME')` are **removed** — config now resolves from SSM / Secrets Manager at deploy time (§8), so synth is clean.
 
 ### OIDC deploy role — external (not CDK)
 
@@ -169,7 +169,7 @@ The GitHub OIDC provider + deploy role (`GithubActionsRole`) are created **outsi
 | **Execution role** | Pull image from ECR, read secrets, write logs | `AmazonECSTaskExecutionRolePolicy` + `secretsmanager:GetSecretValue` on our secrets |
 | **Infrastructure role** | Lets Express Mode manage ALB/target-group/scaling on our behalf | `AmazonECSInfrastructureRoleforExpressGatewayServices` (managed) — **new, required by Express** |
 | **Task role** | App runtime AWS calls (minimal; add if needed) | Least-privilege |
-| **Deploy role** (CI) — *external, not CDK* — `GithubActionsRole` | GitHub OIDC → ECR push, `run-task`, register task def, update Express service, S3 sync, CloudFront invalidate, read the SSM api-base-url param | Scoped custom policy; created in the account, ARN stored in GitHub repo secret `AWS_ROLE_ARN` |
+| **Deploy role** (CI) — *external, not CDK* — `GithubActionsRole` | GitHub OIDC → ECR push; `sts:AssumeRole` on the CDK bootstrap roles (`cdk-hnb659fds-*`) so `cdk deploy` can register the task-def revision + update the Express service via CFN; `ecs:RunTask`/`DescribeTasks` + `iam:PassRole` (execution + task roles) for the migration; S3 sync + CloudFront invalidate for the frontend | Scoped custom policy; created in the account, ARN stored in GitHub repo secret `AWS_ROLE_ARN` |
 
 ---
 
@@ -238,35 +238,57 @@ Re-deploys the two domain-dependent pieces, now reading the real SSM value:
 
 ## 10. CI/CD (`deploy.yml`) revisions
 
-The current `update-service --force-new-deployment` does **not** roll a new image (the task def image tag doesn't change). Revised backend rollout per environment:
+The old `update-service --force-new-deployment` was doubly wrong: it doesn't roll a new image (the task-def image tag doesn't change) and `update-service` isn't the API for an Express Gateway Service. **Rollout model: `cdk deploy`-driven** (chosen 2026-08-14 over the raw-API alternative) — the task def is CDK-managed, so a single `cdk deploy` re-registers the revision at the new image tag *and* updates the Express service via CloudFormation. This keeps CDK the single source of truth (no task-def JSON duplicated in CI, no drift on the next deploy) and matches §9's "steady-state redeploys only touch phase 2 (ApplicationStack)".
+
+Revised backend rollout per environment (implemented as the `deploy-backend` composite action, called by the `staging` and `production` jobs):
 
 1. `build-and-push`: build + push `expense-splitter-api:<sha>` to ECR (unchanged), regenerate `openapi.json` (already fixed to use Cognito env).
-2. **Register a new task-def revision** pointing at `:<sha>` (new step).
-3. **Migration**: `aws ecs run-task` with the new task def, container `api` command overridden to `alembic upgrade head`; wait for exit 0.
-4. **Update the Express service** to the new task-def revision (`update-express-gateway-service` / CFN update), then `aws ecs wait services-stable`.
-5. `deploy-frontend`: unchanged (S3 sync + CloudFront invalidation).
+2. **`cdk deploy ApplicationStack-<env> --exclusively --context imageTag=<sha> --outputs-file cdk-outputs.json`**. This registers a new task-def revision at `:<sha>` and rolls the Express service (canary) via CFN. `--exclusively` avoids touching Network/Cognito/Frontend stacks. Outputs (`TaskDefinitionArn`, `ClusterName`, `MigrationSubnetIds`, `EcsSecurityGroupId`) are captured for the next step.
+3. **Migration**: `aws ecs run-task` against the exact `TaskDefinitionArn` just deployed, launch-type FARGATE, `networkConfiguration` = the private subnets + ECS SG from the outputs (`assignPublicIp=DISABLED`; NAT egress for ECR/Secrets, RDS reachable via the SG), container **`Main`** command overridden to `alembic upgrade head`; wait for `tasks-stopped` and assert exit 0. (Container name is `Main`, not `api` — an Express BYO-task-def requirement.) Migrations must be expand/contract-safe since the canary rollout runs old and new tasks concurrently.
+4. `deploy-frontend`: unchanged (S3 sync + CloudFront invalidation).
 
-### GitHub secrets — what changes
+### GitHub config — secrets vs. variables
 
-| Secret | Note |
-|---|---|
-| `AWS_ROLE_ARN`, `AWS_REGION`, `ECR_REGISTRY` | Unchanged. **`AWS_REGION` must be `eu-west-1`** to match the region hardcoded in `bin/expense-splitter.ts`; a mismatch points the pipeline's ECR/ECS calls at the wrong region. Single-region deployment — no us-east-1 dependency (Express Mode ALB cert/domain are in-region; CloudFront uses its default domain). |
-| `ECS_CLUSTER_STAGING` / `ECS_CLUSTER_PROD` | Express default cluster is `default` unless we set `Cluster`; set explicitly to `expense-splitter-<env>` and reuse |
-| `ECS_SERVICE_STAGING` / `ECS_SERVICE_PROD` | Express service names `expense-splitter-api-<env>` |
-| `MIGRATION_TASK_DEFINITION` | Our custom task def family (container `api`) |
-| `S3_FRONTEND_BUCKET_PROD`, `CLOUDFRONT_DISTRIBUTION_ID_PROD` | Unchanged (frontend stack) |
+Only the role ARN is a **secret** (it embeds the account ID, kept masked). Everything else is a non-sensitive **repo variable** (referenced as `${{ vars.* }}`).
+
+| Name | Kind | Value / note |
+|---|---|---|
+| `AWS_ROLE_ARN` | **secret** | ARN of the external OIDC deploy role (`GithubActionsRole`). Masked in logs. |
+| `AWS_REGION` | variable | `eu-west-1` — **must** match the region hardcoded in `bin/expense-splitter.ts`; a mismatch points ECR/ECS calls at the wrong region. Single-region — no us-east-1 dependency (Express ALB cert/domain are in-region; CloudFront uses its default domain). |
+| `ECR_REGISTRY` | variable | `<account>.dkr.ecr.eu-west-1.amazonaws.com`. |
+| `S3_FRONTEND_BUCKET_PROD` | variable | Deterministic: `expense-splitter-frontend-prod`. |
+| `CLOUDFRONT_DISTRIBUTION_ID_PROD` | variable | **Not known until `FrontendStack-prod` is deployed** — set it after the first frontend deploy (read from the stack's `DistributionId` output). Leave unset rather than placeholder, or the invalidation step targets a nonexistent distribution. |
+| `ENABLE_PROD` | variable | **Gate for the `deploy-production` + `deploy-frontend` jobs.** Leave unset while only staging is bootstrapped — both jobs skip, so a push to `main` rolls out staging alone. Set to `true` after the prod phase-1/phase-2 local runbook has run once (image pushed, api secret populated, `ApplicationStack-prod` deployed), which lets CI take over prod steady-state. |
+| ~~`ECS_CLUSTER_*` / `ECS_SERVICE_*` / `MIGRATION_TASK_DEFINITION`~~ | — | **No longer needed.** Cluster (`expense-splitter-<env>`), service, and task-def family (`expense-splitter-api-<env>`) are deterministic and read from the `cdk deploy` outputs file instead. |
 
 ---
 
 ## 11. Bootstrap / migration order
 
-1. `cdk bootstrap` (first time). Seed `/expense-splitter/<env>/api-base-url` with a placeholder.
-2. **Phase 1 (infra)** — deploy `NetworkStack`, `CognitoStack`, `ApplicationStack`, `FrontendStack` per env (§9). This mints the API domain.
-3. Push an initial image to ECR (Express service needs a valid image to stabilize).
-4. **Seam** — write the Express domain into the SSM parameter.
-5. **Phase 2 (app)** — re-deploy `CognitoStack` + `ApplicationStack`; callbacks and `APP_BASE_URL` pick up the real domain (§9).
-6. Ensure the **external OIDC deploy role** exists; set its ARN as GitHub `AWS_ROLE_ARN`. Add remaining repo secrets + `staging`/`production` environments.
-7. Merge to `main` → pipeline runs (steady-state redeploys are phase-2 only).
+> **Why Express can't come up in one pass (found during first deploy, 2026-08-14).**
+> The Express service's health check is `GET /health`, which executes `SELECT 1`
+> against the DB, and its task reads three JSON keys (`database_url`,
+> `cognito_client_secret`, `csrf_secret_key`) from the `expense-splitter/<env>/api`
+> secret. On a first deploy that secret is an empty shell (not valid JSON) and the
+> only `database_url` that could point at RDS belongs to an instance created in the
+> *same* stack — which the Express resource does not depend on, so Express would try
+> to start tasks before RDS is reachable. Either way `/health` returns 503, the
+> canary rollback fires, and the deploy fails. The fix is the **`deployExpress`
+> context flag** (default `true`): bootstrap deploys `ApplicationStack` once with
+> `-c deployExpress=false` to create RDS + secret + task def, populates the secret,
+> then redeploys with the flag defaulting on so the service stabilizes on first try.
+> This only affects bootstrap; steady-state CI deploys always run with the default.
+
+1. `cdk bootstrap` (first time). Seed the SSM params `/expense-splitter/<env>/api-base-url` (placeholder `http://localhost:8000`) and `/expense-splitter/<env>/allowed-origins` (JSON array) — both are read at deploy time via `{{resolve:ssm}}` and must exist first.
+2. Deploy `EcrStack`, then build + push an initial image (`:bootstrap`) so the task def resolves and (later) Express can stabilize.
+3. **Phase 1a (infra, no service)** — deploy `NetworkStack`, `CognitoStack`, `FrontendStack`, and `ApplicationStack` **with `-c deployExpress=false`** (creates RDS, the secret shell, task def, cluster, roles, log group — but not the Express service).
+4. **Populate the secret** `expense-splitter/<env>/api` with valid JSON: `database_url` (assembled from the RDS-generated master secret + endpoint, `postgresql+asyncpg://…`), `cognito_client_secret` (from `describe-user-pool-client`), and a generated `csrf_secret_key` (≥32 chars).
+5. **Phase 1b (add service)** — redeploy `ApplicationStack` (flag defaults to `true`). Express now stabilizes (valid secret + reachable RDS → `/health` 200) and mints the AWS-provided domain (`ApiEndpoint` output).
+6. **Seam** — write the Express domain into `/expense-splitter/<env>/api-base-url`; update `/expense-splitter/<env>/allowed-origins` if the frontend origin changed.
+7. **Phase 2 (app wiring)** — re-deploy `CognitoStack` + `ApplicationStack`; callbacks and `APP_BASE_URL` pick up the real domain (§9).
+8. **Migration** — one-off `aws ecs run-task` against the deployed task-def revision, container `Main` command `alembic upgrade head` (private subnets + `ecsSg`); wait for stop, assert exit 0.
+9. Ensure the **external OIDC deploy role** exists; set its ARN as GitHub `AWS_ROLE_ARN`. Add remaining repo variables + `staging`/`production` environments.
+10. Merge to `main` → pipeline runs (steady-state redeploys are phase-2 only, always `deployExpress=true`).
 
 ---
 

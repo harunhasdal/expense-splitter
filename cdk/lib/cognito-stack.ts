@@ -1,13 +1,16 @@
 import * as cdk from 'aws-cdk-lib';
 import * as cognito from 'aws-cdk-lib/aws-cognito';
+import * as ssm from 'aws-cdk-lib/aws-ssm';
 import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
 import { Construct } from 'constructs';
 
 interface CognitoStackProps extends cdk.StackProps {
   envName: string;
-  appBaseUrl: string;       // e.g. "https://api.expense-splitter.example.com"
-  googleClientId: string;   // Google OAuth2 client ID (from Secrets Manager in practice)
-  googleClientSecretArn: string;  // ARN of secret holding Google client secret
+  // When false, the Google IdP is not provisioned and the app client offers
+  // Cognito (email/password) sign-in only. Lets us deploy before Google OAuth
+  // credentials exist; flip on (with google-client-id SSM + google-client-secret
+  // secret in place) to add federation later. Controlled by `-c enableGoogle=true`.
+  enableGoogle: boolean;
 }
 
 export class CognitoStack extends cdk.Stack {
@@ -20,7 +23,16 @@ export class CognitoStack extends cdk.Stack {
 
     const domainPrefix = `expense-splitter-${props.envName}`;
 
-    // User Pool — email sign-in + Google federation
+    // Config source (§8): non-secrets from SSM Parameter Store, the Google
+    // client secret from Secrets Manager. `api-base-url` is the two-phase seam
+    // (placeholder in phase 1, real Express domain in phase 2). All resolve at
+    // deploy time, so re-running phase 2 after the SSM update refreshes the
+    // callback URLs.
+    const appBaseUrl = ssm.StringParameter.valueForStringParameter(
+      this, `/expense-splitter/${props.envName}/api-base-url`
+    );
+
+    // User Pool — email sign-in (+ optional Google federation, see enableGoogle)
     const userPool = new cognito.UserPool(this, 'UserPool', {
       userPoolName: `expense-splitter-${props.envName}`,
       selfSignUpEnabled: false,         // invites only / federated only
@@ -44,21 +56,28 @@ export class CognitoStack extends cdk.Stack {
         : cdk.RemovalPolicy.DESTROY,
     });
 
-    // Google IdP
-    const googleSecret = secretsmanager.Secret.fromSecretCompleteArn(
-      this, 'GoogleSecret', props.googleClientSecretArn
-    );
-    const googleIdp = new cognito.UserPoolIdentityProviderGoogle(this, 'Google', {
-      userPool,
-      clientId: props.googleClientId,
-      clientSecretValue: googleSecret.secretValue,
-      scopes: ['openid', 'email', 'profile'],
-      attributeMapping: {
-        email: cognito.ProviderAttribute.GOOGLE_EMAIL,
-        fullname: cognito.ProviderAttribute.GOOGLE_NAME,
-        profilePicture: cognito.ProviderAttribute.GOOGLE_PICTURE,
-      },
-    });
+    // Google IdP — provisioned only when enabled (needs google-client-id in SSM
+    // and the google-client-secret in Secrets Manager).
+    let googleIdp: cognito.UserPoolIdentityProviderGoogle | undefined;
+    if (props.enableGoogle) {
+      const googleClientId = ssm.StringParameter.valueForStringParameter(
+        this, `/expense-splitter/${props.envName}/google-client-id`
+      );
+      const googleSecret = secretsmanager.Secret.fromSecretNameV2(
+        this, 'GoogleSecret', `expense-splitter/${props.envName}/google-client-secret`
+      );
+      googleIdp = new cognito.UserPoolIdentityProviderGoogle(this, 'Google', {
+        userPool,
+        clientId: googleClientId,
+        clientSecretValue: googleSecret.secretValue,
+        scopes: ['openid', 'email', 'profile'],
+        attributeMapping: {
+          email: cognito.ProviderAttribute.GOOGLE_EMAIL,
+          fullname: cognito.ProviderAttribute.GOOGLE_NAME,
+          profilePicture: cognito.ProviderAttribute.GOOGLE_PICTURE,
+        },
+      });
+    }
 
     // App Client — authorization code flow with PKCE + client secret
     const client = new cognito.UserPoolClient(this, 'AppClient', {
@@ -77,24 +96,27 @@ export class CognitoStack extends cdk.Stack {
           cognito.OAuthScope.PROFILE,
         ],
         callbackUrls: [
-          `${props.appBaseUrl}/auth/callback`,
+          `${appBaseUrl}/auth/callback`,
           'http://localhost:8000/auth/callback',  // local dev
         ],
         logoutUrls: [
-          `${props.appBaseUrl}/auth/logout-callback`,
+          `${appBaseUrl}/auth/logout-callback`,
           'http://localhost:8000/auth/logout-callback',
         ],
       },
       supportedIdentityProviders: [
         cognito.UserPoolClientIdentityProvider.COGNITO,
-        cognito.UserPoolClientIdentityProvider.GOOGLE,
+        ...(props.enableGoogle ? [cognito.UserPoolClientIdentityProvider.GOOGLE] : []),
       ],
       idTokenValidity: cdk.Duration.hours(24),
       accessTokenValidity: cdk.Duration.hours(1),
       refreshTokenValidity: cdk.Duration.days(30),
       preventUserExistenceErrors: true,
     });
-    client.node.addDependency(googleIdp);
+    // Ensure the IdP exists before the client references it.
+    if (googleIdp) {
+      client.node.addDependency(googleIdp);
+    }
 
     // Cognito Managed Login domain
     new cognito.UserPoolDomain(this, 'Domain', {

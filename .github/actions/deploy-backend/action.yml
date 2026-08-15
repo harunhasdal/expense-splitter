@@ -1,0 +1,85 @@
+name: Deploy backend
+description: >-
+  Deploy the backend for one environment via CDK, then run the DB migration.
+  cdk deploy re-registers the task-def revision at the new image tag and updates
+  the ECS Express Mode service (single source of truth — no task-def JSON in CI).
+  The migration runs as a one-off run-task against the exact revision just deployed.
+
+inputs:
+  env-name:
+    description: Environment name (staging | prod)
+    required: true
+  image-tag:
+    description: Image tag pushed to ECR (short SHA)
+    required: true
+  role-arn:
+    description: AWS IAM role ARN to assume (GitHub OIDC)
+    required: true
+  aws-region:
+    description: AWS region (must be eu-west-1 to match bin/expense-splitter.ts)
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - uses: aws-actions/configure-aws-credentials@v4
+      with:
+        role-to-assume: ${{ inputs.role-arn }}
+        aws-region: ${{ inputs.aws-region }}
+
+    - uses: actions/setup-node@v4
+      with:
+        node-version: 20
+        cache: npm
+        cache-dependency-path: cdk/package-lock.json
+
+    - name: Install CDK deps
+      shell: bash
+      working-directory: cdk
+      run: npm ci
+
+    - name: Deploy ApplicationStack (${{ inputs.env-name }})
+      shell: bash
+      working-directory: cdk
+      run: |
+        set -euo pipefail
+        # bin/expense-splitter.ts reads the account from this; region is hardcoded.
+        export CDK_DEFAULT_ACCOUNT="$(aws sts get-caller-identity --query Account --output text)"
+        npx cdk deploy "ApplicationStack-${{ inputs.env-name }}" \
+          --exclusively \
+          --require-approval never \
+          --context imageTag="${{ inputs.image-tag }}" \
+          --outputs-file cdk-outputs.json
+
+    - name: Run DB migration (${{ inputs.env-name }})
+      shell: bash
+      working-directory: cdk
+      run: |
+        set -euo pipefail
+        STACK="ApplicationStack-${{ inputs.env-name }}"
+        TASK_DEF=$(jq -r ".\"$STACK\".TaskDefinitionArn" cdk-outputs.json)
+        CLUSTER=$(jq -r ".\"$STACK\".ClusterName" cdk-outputs.json)
+        SUBNETS=$(jq -r ".\"$STACK\".MigrationSubnetIds" cdk-outputs.json)
+        SG=$(jq -r ".\"$STACK\".EcsSecurityGroupId" cdk-outputs.json)
+
+        # One-off migration task in private subnets (NAT egress for ECR/Secrets;
+        # reaches RDS via the ECS SG). Container name must be "Main" (Express BYO).
+        # alembic.ini lives at migrations/alembic.ini (not /app), so pass -c; run
+        # from WORKDIR /app so script_location=migrations resolves to /app/migrations.
+        # PYTHONPATH=/app guarantees env.py can import the app models regardless of
+        # how alembic resolves prepend_sys_path.
+        TASK_ARN=$(aws ecs run-task \
+          --cluster "$CLUSTER" \
+          --task-definition "$TASK_DEF" \
+          --launch-type FARGATE \
+          --network-configuration "awsvpcConfiguration={subnets=[$SUBNETS],securityGroups=[$SG],assignPublicIp=DISABLED}" \
+          --overrides '{"containerOverrides":[{"name":"Main","command":["sh","-c","PYTHONPATH=/app alembic -c migrations/alembic.ini upgrade head"]}]}' \
+          --query 'tasks[0].taskArn' --output text)
+
+        echo "Migration task: $TASK_ARN"
+        aws ecs wait tasks-stopped --cluster "$CLUSTER" --tasks "$TASK_ARN"
+        EXIT=$(aws ecs describe-tasks --cluster "$CLUSTER" --tasks "$TASK_ARN" \
+          --query 'tasks[0].containers[0].exitCode' --output text)
+        if [ "$EXIT" != "0" ]; then
+          echo "Migration failed (exit $EXIT)"; exit 1
+        fi

@@ -1,6 +1,12 @@
 .env
 .env.*
 !.env.example
+# Local virtualenv MUST be excluded: the runtime stage does `COPY . .` after
+# copying the builder's Linux venv, so a host .venv (macOS interpreter,
+# absolute-path shebangs) would clobber it and break `gunicorn` at runtime.
+.venv/
+.git/
+.gitignore
 __pycache__/
 *.pyc
 *.pyo

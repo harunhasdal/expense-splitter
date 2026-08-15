@@ -1,37 +1,45 @@
 #!/usr/bin/env node
 import * as cdk from 'aws-cdk-lib';
 import { NetworkStack } from '../lib/network-stack';
+import { EcrStack } from '../lib/ecr-stack';
 import { ApplicationStack } from '../lib/application-stack';
 import { FrontendStack } from '../lib/frontend-stack';
 import { CognitoStack } from '../lib/cognito-stack';
 
 const app = new cdk.App();
-const envName = app.node.tryGetContext('env') ?? 'prod';
 const env = { account: process.env.CDK_DEFAULT_ACCOUNT, region: 'eu-west-1' };
 
-// Required context values — pass with: cdk deploy -c env=dev -c appBaseUrl=https://...
-// -c googleClientId=... -c googleClientSecretArn=arn:aws:secretsmanager:...
-const appBaseUrl: string = app.node.tryGetContext('appBaseUrl') ?? 'https://REPLACE_ME';
-const googleClientId: string = app.node.tryGetContext('googleClientId') ?? 'REPLACE_ME';
-const googleClientSecretArn: string = app.node.tryGetContext('googleClientSecretArn') ?? 'REPLACE_ME';
+// Baseline image tag for the CDK-managed task definition. Steady-state
+// rollouts register new revisions at :<sha> from CI (see deploy.yml).
+const imageTag: string = app.node.tryGetContext('imageTag') ?? 'bootstrap';
 
-const network = new NetworkStack(app, `NetworkStack-${envName}`, { env, envName });
+// Google federation is off by default so we can deploy before Google OAuth
+// credentials exist. Enable with `-c enableGoogle=true` once the SSM param
+// (google-client-id) and secret (google-client-secret) are in place.
+const enableGoogle: boolean = app.node.tryGetContext('enableGoogle') === true
+  || app.node.tryGetContext('enableGoogle') === 'true';
 
-const cognito = new CognitoStack(app, `CognitoStack-${envName}`, {
-  env,
-  envName,
-  appBaseUrl,
-  googleClientId,
-  googleClientSecretArn,
-});
+// Shared, single ECR repository used by all environments (the image is
+// configuration-agnostic — env-specific config is injected at runtime).
+new EcrStack(app, 'EcrStack', { env });
 
-new ApplicationStack(app, `ApplicationStack-${envName}`, {
-  env,
-  envName,
-  vpc: network.vpc,
-  albSg: network.albSg,
-  ecsSg: network.ecsSg,
-  rdsSg: network.rdsSg,
-});
+for (const envName of ['staging', 'prod']) {
+  const network = new NetworkStack(app, `NetworkStack-${envName}`, { env, envName });
 
-new FrontendStack(app, `FrontendStack-${envName}`, { env, envName });
+  const cognito = new CognitoStack(app, `CognitoStack-${envName}`, { env, envName, enableGoogle });
+
+  new ApplicationStack(app, `ApplicationStack-${envName}`, {
+    env,
+    envName,
+    vpc: network.vpc,
+    ecsSg: network.ecsSg,
+    rdsSg: network.rdsSg,
+    cognitoRegion: env.region,
+    cognitoUserPoolId: cognito.userPoolId,
+    cognitoClientId: cognito.userPoolClientId,
+    cognitoDomain: cognito.cognitoDomain,
+    imageTag,
+  });
+
+  new FrontendStack(app, `FrontendStack-${envName}`, { env, envName });
+}

@@ -3,6 +3,10 @@ FROM python:3.12-slim AS builder
 
 WORKDIR /app
 RUN pip install uv
+# Build the venv against the base image's system Python (not a uv-managed
+# download): the runtime stage copies only /app/.venv, so the venv's python
+# symlink must point at an interpreter that also exists there (/usr/local/bin).
+ENV UV_PYTHON_PREFERENCE=only-system
 COPY pyproject.toml uv.lock ./
 RUN uv sync --frozen --no-dev
 
@@ -34,6 +38,7 @@ FROM python:3.12-slim AS dev
 
 WORKDIR /app
 RUN pip install uv
+ENV UV_PYTHON_PREFERENCE=only-system
 COPY pyproject.toml uv.lock ./
 RUN uv sync --frozen
 
@@ -43,4 +48,4 @@ ENV PYTHONUNBUFFERED=1
 
 EXPOSE 8000
 
-CMD ["sh", "-c", "alembic upgrade head && uvicorn main:app --host 0.0.0.0 --port 8000 --reload"]
+CMD ["sh", "-c", "alembic -c migrations/alembic.ini upgrade head && uvicorn main:app --host 0.0.0.0 --port 8000 --reload"]

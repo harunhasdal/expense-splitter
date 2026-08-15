@@ -18,13 +18,17 @@ jobs:
       - uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
-          aws-region: ${{ secrets.AWS_REGION }}
+          aws-region: ${{ vars.AWS_REGION }}
       - uses: aws-actions/amazon-ecr-login@v2
       - id: meta
         run: echo "sha=${GITHUB_SHA::8}" >> $GITHUB_OUTPUT
       - run: |
-          docker build -t ${{ secrets.ECR_REGISTRY }}/expense-splitter-api:${{ steps.meta.outputs.sha }} backend/
-          docker push ${{ secrets.ECR_REGISTRY }}/expense-splitter-api:${{ steps.meta.outputs.sha }}
+          # --target runtime: the Dockerfile's last stage is `dev` (root, --reload),
+          # so an untargeted build would ship the dev image. --platform pins amd64
+          # to match the X86_64 Fargate task definition.
+          docker build --target runtime --platform linux/amd64 \
+            -t ${{ vars.ECR_REGISTRY }}/expense-splitter-api:${{ steps.meta.outputs.sha }} backend/
+          docker push ${{ vars.ECR_REGISTRY }}/expense-splitter-api:${{ steps.meta.outputs.sha }}
       - name: Generate OpenAPI schema
         run: |
           cd backend
@@ -52,65 +56,38 @@ jobs:
     runs-on: ubuntu-latest
     environment: staging
     steps:
-      - uses: aws-actions/configure-aws-credentials@v4
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/deploy-backend
         with:
-          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
-          aws-region: ${{ secrets.AWS_REGION }}
-      - name: Run migration (staging)
-        run: |
-          TASK_ARN=$(aws ecs run-task \
-            --cluster ${{ secrets.ECS_CLUSTER_STAGING }} \
-            --task-definition ${{ secrets.MIGRATION_TASK_DEFINITION }} \
-            --overrides '{"containerOverrides":[{"name":"api","command":["alembic","upgrade","head"]}]}' \
-            --launch-type FARGATE \
-            --query 'tasks[0].taskArn' --output text)
-          aws ecs wait tasks-stopped --cluster ${{ secrets.ECS_CLUSTER_STAGING }} --tasks $TASK_ARN
-          EXIT=$(aws ecs describe-tasks --cluster ${{ secrets.ECS_CLUSTER_STAGING }} --tasks $TASK_ARN \
-            --query 'tasks[0].containers[0].exitCode' --output text)
-          if [ "$EXIT" != "0" ]; then echo "Migration failed (exit $EXIT)"; exit 1; fi
-      - name: Deploy to staging
-        run: |
-          aws ecs update-service \
-            --cluster ${{ secrets.ECS_CLUSTER_STAGING }} \
-            --service ${{ secrets.ECS_SERVICE_STAGING }} \
-            --force-new-deployment
-          aws ecs wait services-stable \
-            --cluster ${{ secrets.ECS_CLUSTER_STAGING }} \
-            --services ${{ secrets.ECS_SERVICE_STAGING }}
+          env-name: staging
+          image-tag: ${{ needs.build-and-push.outputs.image-tag }}
+          role-arn: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
 
   deploy-production:
     needs: deploy-staging
+    # Dormant until prod is bootstrapped (image pushed, api secret populated,
+    # ApplicationStack-prod deployed once via the phase-1/phase-2 local runbook).
+    # A fresh prod ApplicationStack cannot stabilize Express in one CI pass
+    # (empty secret + unreachable new RDS). Set repo variable ENABLE_PROD=true
+    # to activate this job — deploy-frontend gates on the same variable.
+    if: vars.ENABLE_PROD == 'true'
     runs-on: ubuntu-latest
     environment: production
     steps:
-      - uses: aws-actions/configure-aws-credentials@v4
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/deploy-backend
         with:
-          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
-          aws-region: ${{ secrets.AWS_REGION }}
-      - name: Run migration (production)
-        run: |
-          TASK_ARN=$(aws ecs run-task \
-            --cluster ${{ secrets.ECS_CLUSTER_PROD }} \
-            --task-definition ${{ secrets.MIGRATION_TASK_DEFINITION }} \
-            --overrides '{"containerOverrides":[{"name":"api","command":["alembic","upgrade","head"]}]}' \
-            --launch-type FARGATE \
-            --query 'tasks[0].taskArn' --output text)
-          aws ecs wait tasks-stopped --cluster ${{ secrets.ECS_CLUSTER_PROD }} --tasks $TASK_ARN
-          EXIT=$(aws ecs describe-tasks --cluster ${{ secrets.ECS_CLUSTER_PROD }} --tasks $TASK_ARN \
-            --query 'tasks[0].containers[0].exitCode' --output text)
-          if [ "$EXIT" != "0" ]; then echo "Migration failed (exit $EXIT)"; exit 1; fi
-      - name: Deploy to production
-        run: |
-          aws ecs update-service \
-            --cluster ${{ secrets.ECS_CLUSTER_PROD }} \
-            --service ${{ secrets.ECS_SERVICE_PROD }} \
-            --force-new-deployment
-          aws ecs wait services-stable \
-            --cluster ${{ secrets.ECS_CLUSTER_PROD }} \
-            --services ${{ secrets.ECS_SERVICE_PROD }}
+          env-name: prod
+          image-tag: ${{ needs.build-and-push.outputs.image-tag }}
+          role-arn: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
 
   deploy-frontend:
     needs: deploy-production
+    # Same gate as deploy-production: the frontend build+sync targets the prod
+    # bucket/distribution, which only exist once prod is bootstrapped.
+    if: vars.ENABLE_PROD == 'true'
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -134,9 +111,9 @@ jobs:
       - uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
-          aws-region: ${{ secrets.AWS_REGION }}
-      - run: aws s3 sync dist/ s3://${{ secrets.S3_FRONTEND_BUCKET_PROD }}/ --delete
+          aws-region: ${{ vars.AWS_REGION }}
+      - run: aws s3 sync dist/ s3://${{ vars.S3_FRONTEND_BUCKET_PROD }}/ --delete
       - run: |
           aws cloudfront create-invalidation \
-            --distribution-id ${{ secrets.CLOUDFRONT_DISTRIBUTION_ID_PROD }} \
+            --distribution-id ${{ vars.CLOUDFRONT_DISTRIBUTION_ID_PROD }} \
             --paths "/*"
