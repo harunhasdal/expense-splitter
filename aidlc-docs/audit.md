@@ -278,3 +278,19 @@
 **Context**: Post-workflow Operations — CI pipeline enabled for staging steady-state; prod deferred behind ENABLE_PROD.
 
 ---
+
+## Operations — First CI Rollout: main branch + OIDC immutable-sub fix
+**Timestamp**: 2026-08-18T00:00:00Z
+**User Input**: [AskUserQuestion] deploy branch model = "Create `main`, keep feature branch"; then OIDC role fix = "Patch shared role trust".
+**AI Response**: Discovered the remote had **no `main` branch** (default was `expense-splitter`, holding all history), so the `push: branches: [main]` workflow could never fire. Created `main` as the trunk at the bootstrap commit `7319645` and pushed it (`124025c..7319645`) — the empty initial commit `124025c` had no workflow file, so the earlier accidental push of it triggered nothing. Setting the GitHub default branch to `main` failed (`gh` token lacks repo-admin — 403); left for the user to switch in the UI. The push to `main` triggered Deploy run `31898237325`, which **failed at `build-and-push`** on `configure-aws-credentials`: `Not authorized to perform sts:AssumeRoleWithWebIdentity`. **Root cause**: GitHub now issues an **immutable OIDC subject claim** — `gh api .../actions/oidc/customization/sub` returned `sub_claim_prefix = repo:harunhasdal@4698942/expense-splitter@1333967462`, i.e. the token `sub` carries numeric owner/repo IDs (`repo:harunhasdal@4698942/expense-splitter@1333967462:ref:refs/heads/main`), which the trust pattern `repo:harunhasdal/*:*` (expecting `/` right after `harunhasdal`) cannot match. Verified the OIDC provider itself was fine (aud `sts.amazonaws.com`, thumbprint present) and only `GithubActionsRole` (AdministratorAccess, trust shared with `aws-samples/sample-renewable-planning-agent`) was a candidate. Per user's choice, **patched `GithubActionsRole` trust** via `update-assume-role-policy`: added `repo:harunhasdal@4698942/*:*`, kept the legacy `repo:harunhasdal/*:*` and the `aws-samples` entry, and normalized `ForAnyValue:StringLike` → canonical `StringLike`. Re-ran the failed jobs (`gh run rerun --failed`). Staging-only scope preserved (prod/frontend gated by unset `ENABLE_PROD`).
+**Context**: Post-workflow Operations — first CI-driven rollout; trunk branch created + OIDC trust fixed for GitHub immutable subject claims.
+
+---
+
+## Operations — First CI Rollout SUCCEEDED (staging)
+**Timestamp**: 2026-08-18T00:01:00Z
+**User Input**: N/A (continuation; background-task notifications only)
+**AI Response**: After the OIDC fix, the re-run advanced past auth (configure-aws-credentials + ECR login + docker build/push all green) but failed at **Generate OpenAPI schema** with `ModuleNotFoundError: No module named 'fastapi'` — the step ran bare `python` (system interpreter) instead of the uv venv where `uv sync` installed deps. Fixed `deploy.yml` to use `uv run python -c` (commit `68f5b21`), pushed to `main`. Deploy run `32139057843` **completed/success**: `build-and-push` ✅, `deploy-staging` ✅ (cdk canary deploy + one-off migration), `deploy-production` + `deploy-frontend` skipped (ENABLE_PROD unset — staging-only scope honored). Verified end-to-end: `/health` → HTTP 200 `{"status":"ok","db":"ok"}`; ECS task-def `expense-splitter-api-staging` at **revision 3**, image `...expense-splitter-api:68f5b215` (matches the deployed commit). First CI-driven staging rollout is fully operational. Saved a memory on the GitHub OIDC immutable-subject gotcha. Open follow-ups: (1) switch GitHub default branch to `main` in the UI (gh token lacked repo-admin); (2) bootstrap prod + set `ENABLE_PROD=true` when ready.
+**Context**: Post-workflow Operations — first CI-driven staging deployment complete and verified.
+
+---
