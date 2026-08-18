@@ -33,7 +33,9 @@ jobs:
         run: |
           cd backend
           pip install uv && uv sync --frozen
-          python -c "
+          # `uv run` executes inside the synced .venv; bare `python` would be the
+          # system interpreter without fastapi and fail on `from main import app`.
+          uv run python -c "
           import json, os
           os.environ.update({
             'DATABASE_URL': 'sqlite+aiosqlite:///:memory:',
