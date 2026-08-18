@@ -24,10 +24,11 @@ export class CognitoStack extends cdk.Stack {
     const domainPrefix = `expense-splitter-${props.envName}`;
 
     // Config source (§8): non-secrets from SSM Parameter Store, the Google
-    // client secret from Secrets Manager. `api-base-url` is the two-phase seam
-    // (placeholder in phase 1, real Express domain in phase 2). All resolve at
-    // deploy time, so re-running phase 2 after the SSM update refreshes the
-    // callback URLs.
+    // client secret from Secrets Manager. `api-base-url` is the app's public base
+    // URL — the CloudFront domain under the reverse-proxy model, since Cognito
+    // must redirect the browser to {app}/auth/callback (which CloudFront proxies
+    // to the backend). Resolves at deploy time, so re-running after the SSM
+    // update refreshes the callback URLs.
     const appBaseUrl = ssm.StringParameter.valueForStringParameter(
       this, `/expense-splitter/${props.envName}/api-base-url`
     );

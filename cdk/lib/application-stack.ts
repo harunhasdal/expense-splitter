@@ -115,8 +115,12 @@ export class ApplicationStack extends cdk.Stack {
     });
 
     // ---- Config from SSM (written during bootstrap / phase 2) ----
-    // api-base-url is the two-phase seam: seeded with a placeholder in phase 1,
-    // overwritten with the real Express domain in phase 2 (§9 of the design).
+    // api-base-url is the app's PUBLIC base URL. Under the CloudFront
+    // reverse-proxy model this is the CloudFront domain (the single origin that
+    // serves the SPA and proxies the API), NOT the backend Express domain — the
+    // browser only ever sees CloudFront. APP_BASE_URL builds OAuth redirect_uris
+    // (/auth/callback), so it must point where the browser lands. Seeded with a
+    // placeholder in phase 1, set to the CloudFront domain in phase 2.
     const appBaseUrl = ssm.StringParameter.valueForStringParameter(
       this, `/expense-splitter/${props.envName}/api-base-url`
     );

@@ -66,6 +66,44 @@ jobs:
           role-arn: ${{ secrets.AWS_ROLE_ARN }}
           aws-region: ${{ vars.AWS_REGION }}
 
+  deploy-frontend-staging:
+    needs: deploy-staging
+    # No ENABLE_PROD gate: staging is bootstrapped, so the SPA ships on every
+    # push to main. The build is env-agnostic (relative same-origin API paths,
+    # no VITE_* baked in) — the same dist works for any environment; only the
+    # S3 bucket + CloudFront distribution differ. Runs after the backend so the
+    # reverse-proxied API is already live behind CloudFront.
+    runs-on: ubuntu-latest
+    environment: staging
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: openapi
+          path: frontend/
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm run build
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+      - run: aws s3 sync dist/ s3://${{ vars.S3_FRONTEND_BUCKET_STAGING }}/ --delete
+      - run: |
+          aws cloudfront create-invalidation \
+            --distribution-id ${{ vars.CLOUDFRONT_DISTRIBUTION_ID_STAGING }} \
+            --paths "/*"
+
   deploy-production:
     needs: deploy-staging
     # Dormant until prod is bootstrapped (image pushed, api secret populated,

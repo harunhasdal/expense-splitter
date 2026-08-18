@@ -83,11 +83,22 @@ eu-west-1  (per environment: prod = 10.0.0.0/16, staging = 10.1.0.0/16)
   | [CloudWatch Logs] (created by Express Mode) |
   +---------------------------------------------+
 
-  FRONTEND (unchanged — already implemented)
-  +---------------------------------------------+
-  | [S3] expense-splitter-frontend-<env>        |
-  | [CloudFront]  OAI, security headers, SPA    |
-  +---------------------------------------------+
+  FRONTEND — single origin (CloudFront reverse proxy)
+  +--------------------------------------------------------------+
+  | [CloudFront]  OAI, security headers, SPA fallback            |
+  |   default behavior          -> [S3] expense-splitter-        |
+  |                                   frontend-<env>  (the SPA)  |
+  |   /auth/* /groups /groups/* -> [HTTP origin] the Express     |
+  |   /health                      domain (caching disabled,    |
+  |                                all cookies/headers/qs fwd,   |
+  |                                Host = origin domain)         |
+  +--------------------------------------------------------------+
+  Why single-origin: the SPA calls the API with same-origin RELATIVE
+  paths and CSP connect-src 'self'; session/CSRF cookies are SameSite=Lax
+  (never sent cross-site). So CloudFront is the one public origin — it
+  serves the SPA and reverse-proxies the API. APP_BASE_URL + Cognito
+  callback URLs therefore point at the CloudFront domain, not the Express
+  domain (the browser never sees the Express domain).
 
   Migration: one-off `aws ecs run-task` against the same custom task def,
              overriding container "api" command -> `alembic upgrade head`
@@ -205,7 +216,12 @@ Because the API must be publicly reachable, Express Mode places the Fargate task
 
 ## 9. Two-phase deployment (infra → app)
 
-Express Mode generates the API domain at create time, but `cognito-stack.ts` callback URLs (`${appBaseUrl}/auth/callback`) and the app's `APP_BASE_URL` depend on that hostname. We split deployment into two phases with a stable seam between them: **an SSM parameter `/expense-splitter/<env>/api-base-url`** that phase 1 seeds with a placeholder and phase 2 overwrites with the real domain. Cognito and the task def read this parameter, so domain-dependent config lives entirely in phase 2.
+Express Mode generates the backend domain at create time. Two SSM parameters form the stable seam between phases (both seeded with placeholders in phase 1, set to real values in phase 2 — all reads resolve at deploy time):
+
+- **`/expense-splitter/<env>/api-base-url`** — the app's **public** base URL = the **CloudFront** domain (single-origin reverse-proxy model, §4). `cognito-stack.ts` callback URLs (`${appBaseUrl}/auth/callback`) and the task def's `APP_BASE_URL` read this, because the browser only ever talks to CloudFront. (Named `api-base-url` for historical reasons; it is the app/CloudFront URL, not the Express domain.)
+- **`/expense-splitter/<env>/api-origin-domain`** — the backend's raw Express **hostname** (no scheme). `frontend-stack.ts` reads it to configure the CloudFront HTTP origin that `/auth`, `/groups`, `/health` reverse-proxy to.
+
+> Gotcha: `cdk diff` reports "no differences" when only an `SSM::Parameter::Value` *value* changes (the template Ref is unchanged), but `cdk deploy` **re-resolves** the SSM value at update time and applies it. Verify by inspecting the resource afterward (e.g. `describe-user-pool-client` callback URLs), not by trusting the diff.
 
 ### Phase 1 — Infrastructure (`cdk deploy` infra stacks)
 
@@ -214,23 +230,25 @@ Provisions everything that does **not** depend on the API domain, and produces i
 - `NetworkStack` — VPC, subnets, security groups.
 - `CognitoStack` — user pool, Google IdP, app client. Callback/logout URLs seeded from the placeholder SSM value (plus `http://localhost:8000` for local dev, which stays valid).
 - `ApplicationStack` — ECR, RDS, Secrets Manager, custom task def, and the **`CfnExpressGatewayService`** (this is what mints the AWS-provided domain). `APP_BASE_URL` reads the placeholder SSM value.
-- `FrontendStack` — S3 + CloudFront (domain-independent).
+- `FrontendStack` — S3 + CloudFront. The CloudFront domain is stable from first create; the backend HTTP origin reads `api-origin-domain` (placeholder in phase 1).
 - Push an initial image to ECR so the Express service can reach a stable state.
 
-**Output of phase 1**: the Express service's generated domain (via `CfnOutput`).
+**Outputs of phase 1**: the Express service's generated domain (`ApplicationStack` `ApiEndpoint`) and the CloudFront domain (`FrontendStack` `DistributionDomain`).
 
-### Seam — capture the domain
+### Seam — capture the domains
 
-Write the Express domain into `/expense-splitter/<env>/api-base-url` (manually, or a small script reading the stack output). This is the only handoff between phases.
+- Write the **CloudFront** domain into `/expense-splitter/<env>/api-base-url` (the app's public URL — what APP_BASE_URL + Cognito callbacks use).
+- Write the **Express** hostname (no scheme) into `/expense-splitter/<env>/api-origin-domain` (what CloudFront proxies API paths to).
 
-### Phase 2 — Application wiring (`cdk deploy` again, domain now known)
+### Phase 2 — Application wiring (`cdk deploy` again, domains now known)
 
-Re-deploys the two domain-dependent pieces, now reading the real SSM value:
+Re-deploys the domain-dependent pieces, now reading the real SSM values:
 
-- `CognitoStack` — callback/logout URLs updated to `https://<express-domain>/auth/callback` (+ logout).
-- `ApplicationStack` task def — `APP_BASE_URL` updated to the real domain; rolls a new task-def revision and updates the Express service.
+- `CognitoStack` — callback/logout URLs updated to `https://<cloudfront-domain>/auth/callback` (+ logout).
+- `ApplicationStack` task def — `APP_BASE_URL` updated to the CloudFront domain; rolls a new task-def revision and updates the Express service.
+- `FrontendStack` — CloudFront backend origin points at the real Express hostname; API behaviors go live.
 
-`NetworkStack`, `FrontendStack`, RDS, and ECR are unchanged in phase 2 (no-op).
+`NetworkStack`, RDS, and ECR are unchanged in phase 2 (no-op).
 
 > Steady-state redeploys (new app image) only touch phase 2. Phase 1 re-runs only when infra changes. The SSM seam means neither phase hard-codes the domain, so this is repeatable, not a one-time bootstrap hack.
 
@@ -245,7 +263,9 @@ Revised backend rollout per environment (implemented as the `deploy-backend` com
 1. `build-and-push`: build + push `expense-splitter-api:<sha>` to ECR (unchanged), regenerate `openapi.json` (already fixed to use Cognito env).
 2. **`cdk deploy ApplicationStack-<env> --exclusively --context imageTag=<sha> --outputs-file cdk-outputs.json`**. This registers a new task-def revision at `:<sha>` and rolls the Express service (canary) via CFN. `--exclusively` avoids touching Network/Cognito/Frontend stacks. Outputs (`TaskDefinitionArn`, `ClusterName`, `MigrationSubnetIds`, `EcsSecurityGroupId`) are captured for the next step.
 3. **Migration**: `aws ecs run-task` against the exact `TaskDefinitionArn` just deployed, launch-type FARGATE, `networkConfiguration` = the private subnets + ECS SG from the outputs (`assignPublicIp=DISABLED`; NAT egress for ECR/Secrets, RDS reachable via the SG), container **`Main`** command overridden to `alembic upgrade head`; wait for `tasks-stopped` and assert exit 0. (Container name is `Main`, not `api` — an Express BYO-task-def requirement.) Migrations must be expand/contract-safe since the canary rollout runs old and new tasks concurrently.
-4. `deploy-frontend`: unchanged (S3 sync + CloudFront invalidation).
+4. `deploy-frontend-staging`: **ungated** (staging is bootstrapped) — `needs: deploy-staging`, builds the SPA and does S3 sync + CloudFront invalidation against the staging bucket/distribution. The build is env-agnostic (relative same-origin API paths, no `VITE_*` baked in), so one `dist` works for any environment. `deploy-frontend` (prod) is the same steps against the prod bucket/distribution, gated by `ENABLE_PROD` + `needs: deploy-production`.
+
+> Note: CI only ever runs `cdk deploy ApplicationStack-<env>` (the composite action). `CognitoStack` and `FrontendStack` are **not** in CI — deploy them locally (`cdk deploy CognitoStack-<env> FrontendStack-<env>`) when their config or the SSM seam values change (e.g. repointing `api-base-url`, adding `api-origin-domain`, or changing CloudFront behaviors).
 
 ### GitHub config — secrets vs. variables
 
@@ -256,9 +276,11 @@ Only the role ARN is a **secret** (it embeds the account ID, kept masked). Every
 | `AWS_ROLE_ARN` | **secret** | ARN of the external OIDC deploy role (`GithubActionsRole`). Masked in logs. |
 | `AWS_REGION` | variable | `eu-west-1` — **must** match the region hardcoded in `bin/expense-splitter.ts`; a mismatch points ECR/ECS calls at the wrong region. Single-region — no us-east-1 dependency (Express ALB cert/domain are in-region; CloudFront uses its default domain). |
 | `ECR_REGISTRY` | variable | `<account>.dkr.ecr.eu-west-1.amazonaws.com`. |
+| `S3_FRONTEND_BUCKET_STAGING` | variable | Deterministic: `expense-splitter-frontend-staging`. Used by the ungated `deploy-frontend-staging` job. |
+| `CLOUDFRONT_DISTRIBUTION_ID_STAGING` | variable | Staging distribution id (`FrontendStack-staging` `DistributionId` output, e.g. `E1H1ALO1O9DQ91`). |
 | `S3_FRONTEND_BUCKET_PROD` | variable | Deterministic: `expense-splitter-frontend-prod`. |
 | `CLOUDFRONT_DISTRIBUTION_ID_PROD` | variable | **Not known until `FrontendStack-prod` is deployed** — set it after the first frontend deploy (read from the stack's `DistributionId` output). Leave unset rather than placeholder, or the invalidation step targets a nonexistent distribution. |
-| `ENABLE_PROD` | variable | **Gate for the `deploy-production` + `deploy-frontend` jobs.** Leave unset while only staging is bootstrapped — both jobs skip, so a push to `main` rolls out staging alone. Set to `true` after the prod phase-1/phase-2 local runbook has run once (image pushed, api secret populated, `ApplicationStack-prod` deployed), which lets CI take over prod steady-state. |
+| `ENABLE_PROD` | variable | **Gate for the `deploy-production` + `deploy-frontend` (prod) jobs.** Leave unset while only staging is bootstrapped — both skip, so a push to `main` rolls out staging (backend + frontend) alone. Set to `true` after the prod phase-1/phase-2 local runbook has run once (image pushed, api secret populated, `ApplicationStack-prod` deployed), which lets CI take over prod steady-state. |
 | ~~`ECS_CLUSTER_*` / `ECS_SERVICE_*` / `MIGRATION_TASK_DEFINITION`~~ | — | **No longer needed.** Cluster (`expense-splitter-<env>`), service, and task-def family (`expense-splitter-api-<env>`) are deterministic and read from the `cdk deploy` outputs file instead. |
 
 ---
@@ -279,13 +301,13 @@ Only the role ARN is a **secret** (it embeds the account ID, kept masked). Every
 > then redeploys with the flag defaulting on so the service stabilizes on first try.
 > This only affects bootstrap; steady-state CI deploys always run with the default.
 
-1. `cdk bootstrap` (first time). Seed the SSM params `/expense-splitter/<env>/api-base-url` (placeholder `http://localhost:8000`) and `/expense-splitter/<env>/allowed-origins` (JSON array) — both are read at deploy time via `{{resolve:ssm}}` and must exist first.
+1. `cdk bootstrap` (first time). Seed the SSM params `/expense-splitter/<env>/api-base-url` (placeholder `http://localhost:8000`), `/expense-splitter/<env>/api-origin-domain` (placeholder, e.g. `localhost`), and `/expense-splitter/<env>/allowed-origins` (JSON array) — all read at deploy time and must exist first.
 2. Deploy `EcrStack`, then build + push an initial image (`:bootstrap`) so the task def resolves and (later) Express can stabilize.
 3. **Phase 1a (infra, no service)** — deploy `NetworkStack`, `CognitoStack`, `FrontendStack`, and `ApplicationStack` **with `-c deployExpress=false`** (creates RDS, the secret shell, task def, cluster, roles, log group — but not the Express service).
 4. **Populate the secret** `expense-splitter/<env>/api` with valid JSON: `database_url` (assembled from the RDS-generated master secret + endpoint, `postgresql+asyncpg://…`), `cognito_client_secret` (from `describe-user-pool-client`), and a generated `csrf_secret_key` (≥32 chars).
 5. **Phase 1b (add service)** — redeploy `ApplicationStack` (flag defaults to `true`). Express now stabilizes (valid secret + reachable RDS → `/health` 200) and mints the AWS-provided domain (`ApiEndpoint` output).
-6. **Seam** — write the Express domain into `/expense-splitter/<env>/api-base-url`; update `/expense-splitter/<env>/allowed-origins` if the frontend origin changed.
-7. **Phase 2 (app wiring)** — re-deploy `CognitoStack` + `ApplicationStack`; callbacks and `APP_BASE_URL` pick up the real domain (§9).
+6. **Seam** — write the **CloudFront** domain into `/expense-splitter/<env>/api-base-url` (from `FrontendStack` `DistributionDomain`) and the **Express hostname** (no scheme) into `/expense-splitter/<env>/api-origin-domain` (from `ApplicationStack` `ApiEndpoint`); update `/expense-splitter/<env>/allowed-origins` if the frontend origin changed.
+7. **Phase 2 (app wiring)** — re-deploy `CognitoStack` + `ApplicationStack` + `FrontendStack`; callbacks and `APP_BASE_URL` pick up the CloudFront domain, and CloudFront's backend origin picks up the Express hostname (§9).
 8. **Migration** — one-off `aws ecs run-task` against the deployed task-def revision, container `Main` command `alembic upgrade head` (private subnets + `ecsSg`); wait for stop, assert exit 0.
 9. Ensure the **external OIDC deploy role** exists; set its ARN as GitHub `AWS_ROLE_ARN`. Add remaining repo variables + `staging`/`production` environments.
 10. Merge to `main` → pipeline runs (steady-state redeploys are phase-2 only, always `deployExpress=true`).
