@@ -5,13 +5,12 @@ from logging.config import fileConfig
 from alembic import context
 from sqlalchemy.ext.asyncio import create_async_engine
 
-from core.db import Base
-
 # Import all models so Alembic sees them for autogenerate
 import auth.models  # noqa: F401
-import groups.models  # noqa: F401
 import expenses.models  # noqa: F401
+import groups.models  # noqa: F401
 import settlements.models  # noqa: F401
+from core.db import Base
 
 config = context.config
 if config.config_file_name:

@@ -41,7 +41,9 @@ async def create(
 
 async def list_for_group(db: AsyncSession, group_id: uuid.UUID) -> list[Settlement]:
     result = await db.execute(
-        select(Settlement).where(Settlement.group_id == group_id).order_by(Settlement.recorded_at.desc())
+        select(Settlement)
+        .where(Settlement.group_id == group_id)
+        .order_by(Settlement.recorded_at.desc())
     )
     return list(result.scalars().all())
 

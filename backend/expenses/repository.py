@@ -1,11 +1,11 @@
 import uuid
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from decimal import Decimal
 
 from sqlalchemy import func, select
-from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from expenses.models import Expense, ExpenseSplit
 
@@ -83,7 +83,9 @@ async def list_for_group(
     count_result = await db.execute(select(func.count()).select_from(stmt.subquery()))
     total = count_result.scalar_one()
 
-    stmt = stmt.offset((page - 1) * page_size).limit(page_size).options(selectinload(Expense.splits))
+    stmt = stmt.offset((page - 1) * page_size).limit(page_size).options(
+        selectinload(Expense.splits)
+    )
     result = await db.execute(stmt)
     return list(result.scalars().all()), total
 
@@ -91,7 +93,7 @@ async def list_for_group(
 async def archive(
     db: AsyncSession, expense: Expense, archived_by: uuid.UUID
 ) -> Expense:
-    expense.archived_at = datetime.now(timezone.utc)
+    expense.archived_at = datetime.now(UTC)
     expense.archived_by = archived_by
     await db.flush()
     return expense

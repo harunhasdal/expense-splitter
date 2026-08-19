@@ -1,8 +1,9 @@
-from contextlib import asynccontextmanager
 from collections.abc import AsyncGenerator
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from core.config import settings
 from core.errors import global_exception_handler
@@ -41,10 +42,10 @@ def create_app() -> FastAPI:
 
     # Routers
     from auth.router import router as auth_router
-    from groups.router import router as groups_router
-    from expenses.router import router as expenses_router
-    from settlements.router import router as settlements_router
     from balance.router import router as balance_router
+    from expenses.router import router as expenses_router
+    from groups.router import router as groups_router
+    from settlements.router import router as settlements_router
 
     app.include_router(auth_router, prefix="/auth", tags=["auth"])
     app.include_router(groups_router, prefix="/groups", tags=["groups"])
@@ -53,15 +54,15 @@ def create_app() -> FastAPI:
     app.include_router(balance_router, prefix="/groups", tags=["balance"])
 
     @app.get("/health", tags=["health"])
-    async def health() -> dict[str, str]:
+    async def health() -> JSONResponse:
         from sqlalchemy import text
+
         from core.db import AsyncSessionLocal
         try:
             async with AsyncSessionLocal() as session:
                 await session.execute(text("SELECT 1"))
-            return {"status": "ok", "db": "ok"}
+            return JSONResponse({"status": "ok", "db": "ok"})
         except Exception:
-            from fastapi.responses import JSONResponse
             return JSONResponse({"status": "degraded", "db": "unavailable"}, status_code=503)
 
     return app

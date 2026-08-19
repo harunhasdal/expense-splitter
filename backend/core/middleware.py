@@ -54,7 +54,8 @@ class CSRFMiddleware(BaseHTTPMiddleware):
 
     async def dispatch(self, request: Request, call_next: object) -> Response:
         if request.method in CSRF_SAFE_METHODS:
-            return await call_next(request)  # type: ignore[operator,return-value]
+            response: Response = await call_next(request)  # type: ignore[operator]
+            return response
 
         csrf_cookie = request.cookies.get("csrf_token")
         csrf_header = request.headers.get("X-CSRF-Token")
@@ -70,4 +71,5 @@ class CSRFMiddleware(BaseHTTPMiddleware):
         if csrf_cookie != csrf_header:
             return JSONResponse({"error": "CSRF token mismatch"}, status_code=403)
 
-        return await call_next(request)  # type: ignore[operator,return-value]
+        response = await call_next(request)  # type: ignore[operator]
+        return response

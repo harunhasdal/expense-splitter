@@ -14,9 +14,9 @@ jobs:
         working-directory: backend
     steps:
       - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v3
+      - uses: astral-sh/setup-uv@v10.0.1
         with:
-          version: "0.2.33"
+          version: "0.12.3"
       - run: uv sync --frozen --extra dev
       - run: uv run ruff check .
       - run: uv run mypy . --strict
@@ -32,7 +32,11 @@ jobs:
           ALLOWED_ORIGINS: '["http://localhost:5173"]'
           CSRF_SECRET_KEY: "test-secret-key-minimum-32-chars!!"
           APP_BASE_URL: "http://localhost:8000"
-      - run: uv run pip-audit
+      # PYSEC-2026-1325 (ecdsa): Minerva timing side-channel in ECDSA signing.
+      # No upstream fix exists, and the code path is unreachable here — our JWT
+      # verification uses RS256 (RSA) only, never the ecdsa package's ECDSA path.
+      # The gate stays hard for every other current and future advisory.
+      - run: uv run pip-audit --ignore-vuln PYSEC-2026-1325
 
   frontend-ci:
     runs-on: ubuntu-latest

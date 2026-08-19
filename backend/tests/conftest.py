@@ -1,7 +1,6 @@
 import uuid
 from collections.abc import AsyncGenerator
 
-import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
@@ -56,8 +55,9 @@ async def auth_client(db_session: AsyncSession) -> AsyncGenerator[tuple[AsyncCli
     async def override_current_user() -> User:
         return user
 
-    from auth.middleware import get_current_user
     from itsdangerous import URLSafeTimedSerializer
+
+    from auth.middleware import get_current_user
     from core.config import settings
 
     app.dependency_overrides[get_db] = override_db
@@ -67,7 +67,7 @@ async def auth_client(db_session: AsyncSession) -> AsyncGenerator[tuple[AsyncCli
     csrf_token = URLSafeTimedSerializer(settings.csrf_secret_key.get_secret_value()).dumps("test")
 
     async with AsyncClient(
-        transport=ASGITransport(app=app),
+        transport=ASGITransport(app=app),  # type: ignore[arg-type]
         base_url="http://test",
         cookies={"csrf_token": csrf_token},
         headers={"X-CSRF-Token": csrf_token},

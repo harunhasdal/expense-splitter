@@ -24,7 +24,7 @@ async def get_current_user(
         # Fall back to lookup by cognito_sub when app_user_id claim is absent
         cognito_sub = str(claims["sub"])
     except (ValueError, KeyError):
-        raise HTTPException(status_code=401, detail="Authentication required")
+        raise HTTPException(status_code=401, detail="Authentication required") from None
 
     user: User | None = None
     if user_id_str:
@@ -35,7 +35,7 @@ async def get_current_user(
 
     if not user:
         from sqlalchemy import select
-        from core.db import AsyncSessionLocal
+
         result = await db.execute(
             select(User).where(User.cognito_sub == cognito_sub)
         )

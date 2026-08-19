@@ -5,21 +5,20 @@ PBT rules enforced: PBT-02, PBT-03, PBT-05, PBT-07, PBT-08, PBT-09.
 import uuid
 from decimal import Decimal
 
-import pytest
 from hypothesis import given, settings
 
 from balance.engine import (
     CENT,
     ZERO,
+    ExpenseInput,
     MemberBalance,
+    SettlementInput,
     SplitDetail,
     SplitType,
     aggregate_balances,
     compute_shares,
     simplify_debts,
     validate_split,
-    ExpenseInput,
-    SettlementInput,
 )
 from tests.unit.strategies import (
     balance_map_input,
@@ -99,7 +98,11 @@ class TestPercentageSplit:
 class TestRatioSplit:
     def test_1_2_3_ratio(self) -> None:
         m1, m2, m3 = _ids(3)
-        details = [SplitDetail(m1, Decimal("1")), SplitDetail(m2, Decimal("2")), SplitDetail(m3, Decimal("3"))]
+        details = [
+            SplitDetail(m1, Decimal("1")),
+            SplitDetail(m2, Decimal("2")),
+            SplitDetail(m3, Decimal("3")),
+        ]
         shares = compute_shares(SplitType.RATIO, Decimal("120.00"), [m1, m2, m3], details)
         by_id = {s.member_id: s.computed_amount for s in shares}
         assert by_id[m1] == Decimal("20.00")
@@ -184,7 +187,9 @@ class TestDebtSimplification:
 
 @given(equal_split_input())
 @settings(max_examples=300)
-def test_pbt_equal_split_sum_invariant(args: tuple) -> None:
+def test_pbt_equal_split_sum_invariant(
+    args: tuple[Decimal, list[uuid.UUID], list[SplitDetail]],
+) -> None:
     """PBT-03: sum(computed_amount) == total_amount for all valid EQUAL inputs."""
     total, members, details = args
     shares = compute_shares(SplitType.EQUAL, total, members, details)
@@ -193,7 +198,9 @@ def test_pbt_equal_split_sum_invariant(args: tuple) -> None:
 
 @given(exact_split_input())
 @settings(max_examples=300)
-def test_pbt_exact_split_sum_invariant(args: tuple) -> None:
+def test_pbt_exact_split_sum_invariant(
+    args: tuple[Decimal, list[uuid.UUID], list[SplitDetail]],
+) -> None:
     """PBT-03: sum(computed_amount) == total_amount for all valid EXACT inputs."""
     total, members, details = args
     result = validate_split(SplitType.EXACT, total, members, details)
@@ -204,7 +211,9 @@ def test_pbt_exact_split_sum_invariant(args: tuple) -> None:
 
 @given(percentage_split_input())
 @settings(max_examples=300)
-def test_pbt_percentage_split_sum_invariant(args: tuple) -> None:
+def test_pbt_percentage_split_sum_invariant(
+    args: tuple[Decimal, list[uuid.UUID], list[SplitDetail]],
+) -> None:
     """PBT-03: sum(computed_amount) == total_amount for all valid PERCENTAGE inputs."""
     total, members, details = args
     result = validate_split(SplitType.PERCENTAGE, total, members, details)
@@ -215,7 +224,9 @@ def test_pbt_percentage_split_sum_invariant(args: tuple) -> None:
 
 @given(ratio_split_input())
 @settings(max_examples=300)
-def test_pbt_ratio_split_sum_invariant(args: tuple) -> None:
+def test_pbt_ratio_split_sum_invariant(
+    args: tuple[Decimal, list[uuid.UUID], list[SplitDetail]],
+) -> None:
     """PBT-03: sum(computed_amount) == total_amount for all valid RATIO inputs."""
     total, members, details = args
     result = validate_split(SplitType.RATIO, total, members, details)
@@ -226,7 +237,7 @@ def test_pbt_ratio_split_sum_invariant(args: tuple) -> None:
 
 @given(balance_map_input())
 @settings(max_examples=200)
-def test_pbt_simplify_debts_oracle(balances: dict) -> None:
+def test_pbt_simplify_debts_oracle(balances: dict[str, list[MemberBalance]]) -> None:
     """PBT-05: Applying all suggestions to balances yields zero net for all members."""
     suggestions = simplify_debts(balances)
     for currency, suggestion_list in suggestions.items():
@@ -243,7 +254,7 @@ def test_pbt_simplify_debts_oracle(balances: dict) -> None:
 
 @given(balance_map_input())
 @settings(max_examples=200)
-def test_pbt_simplify_debts_size_bound(balances: dict) -> None:
+def test_pbt_simplify_debts_size_bound(balances: dict[str, list[MemberBalance]]) -> None:
     """PBT-03: Number of suggestions <= n-1 for n members."""
     for currency, suggestion_list in simplify_debts(balances).items():
         n = len(balances.get(currency, []))
@@ -259,9 +270,12 @@ def test_engine_has_no_forbidden_imports() -> None:
 
     source = inspect.getsource(eng)
     tree = ast.parse(source)
-    forbidden = {"fastapi", "sqlalchemy", "httpx", "auth", "groups", "expenses", "settlements", "core"}
+    forbidden = {
+        "fastapi", "sqlalchemy", "httpx", "auth",
+        "groups", "expenses", "settlements", "core",
+    }
     for node in ast.walk(tree):
-        if isinstance(node, (ast.Import, ast.ImportFrom)):
+        if isinstance(node, ast.Import | ast.ImportFrom):
             module = getattr(node, "module", "") or ""
             for name in (node.names if isinstance(node, ast.Import) else []):
                 module = getattr(name, "name", module)

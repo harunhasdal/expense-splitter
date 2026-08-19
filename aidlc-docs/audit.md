@@ -302,3 +302,19 @@
 **Context**: Post-workflow Operations — wiring the staging frontend via CloudFront reverse-proxy to the ECS Express backend.
 
 ---
+
+## Operations — Staging frontend LIVE (verified end-to-end)
+**Timestamp**: 2026-08-18T22:55:00Z
+**User Input**: `gh pr merge 1 --merge` (user merged PR #1 into `main`).
+**AI Response**: Merge (`efee60b`) triggered Deploy run `32189482434` → **success**: `build-and-push` ✅, `deploy-staging` ✅ (backend cdk canary + migration, now task-def **rev 4** image `:efee60bc`), `deploy-frontend-staging` ✅ (SPA built + `aws s3 sync` to `expense-splitter-frontend-staging` + CloudFront invalidation); `deploy-production` + `deploy-frontend` (prod) skipped (ENABLE_PROD unset). Verified end-to-end against `https://d3qsuesb689oq9.cloudfront.net`: (1) SPA root → HTTP 200 text/html, asset `/assets/index-y7nzW0Ec.js` → 200; (2) `/auth/login` → 307 to Cognito authorize with `redirect_uri=https://d3qsuesb689oq9.cloudfront.net/auth/callback` (matches the Cognito allowlist), proving the running backend `APP_BASE_URL` = CloudFront; (3) confirmed `APP_BASE_URL=https://d3qsuesb689oq9.cloudfront.net` in task-def rev 4. The earlier login inconsistency window is closed (backend + Cognito both on CloudFront). Separately noted a PRE-EXISTING, unrelated failure in the `ci.yml` workflow (not `deploy.yml`, and non-gating): `backend-ci` pins `setup-uv@v3 version 0.2.33` which panics on the current `uv.lock` ("could not find root"); `frontend-ci` runs ESLint 8.57 with no config file present. Left as follow-ups. Open follow-ups also: (1) switch GitHub default branch to `main` in the UI; (2) bootstrap prod + `ENABLE_PROD=true`; (3) fix `ci.yml`.
+**Context**: Post-workflow Operations — staging frontend deployment complete and verified via CloudFront single-origin reverse-proxy.
+
+---
+
+## Operations — Fix red `ci.yml` (lint/type/test/audit gates)
+**Timestamp**: 2026-08-19T00:00:00Z
+**User Input**: "I switched the default branch to main. Let's fix the red ci.yml as well an create a pr"
+**AI Response**: Made the non-gating `ci.yml` workflow green. `backend-ci`: (1) bumped `astral-sh/setup-uv@v3`→`@v10` and pinned uv `0.2.33`→`0.12.3` (the old pin panicked on the current `uv.lock`); (2) ran `ruff --fix` + manual fixes (B008 bugbear allowlist for FastAPI DI markers, migration `E501` per-file-ignore, B904 `raise ... from None`, `UP` autofixes, unused-import removal) → `ruff check .` clean; (3) fixed 19 `mypy --strict` errors across `balance/engine.py`, `core/middleware.py`, `core/logging.py`, `main.py`, `groups/service.py`, `tests/conftest.py`, `tests/unit/strategies.py`, `tests/unit/test_engine.py` → `mypy . --strict` clean (49 files); (4) `pytest` 40 passed, coverage 74.63% ≥ 70%. `frontend-ci`: added `.eslintrc.cjs` (ESLint 8.57 classic config, was missing) and 2 `react-refresh/only-export-components` disable comments in `AuthContext.tsx` → `lint`/`type-check`/`build` all clean. Security: to clear pip-audit, upgraded fastapi 0.111→0.141 / starlette 0.37.2→1.6 / pydantic 2.8→2.13 / pydantic-settings→2.15 / python-jose 3.3→3.5 (clears PYSEC-2026-248/1941/1943/2280/2281 + PYSEC-2024-232/233), verified app import + OpenAPI (15 paths) + full test suite unaffected by the starlette 1.0 major. The lone residual advisory PYSEC-2026-1325 (`ecdsa`, no upstream fix) is `--ignore-vuln`'d in the pip-audit step with a documented rationale (JWT verification is RS256/RSA-only, so the ECDSA timing side-channel path is unreachable); gate stays hard for all other/future vulns. Committing on branch `fix/ci-green` and opening a PR to `main`; user merges.
+**Context**: Two upstream decisions captured via AskUserQuestion — starlette CVEs → "Upgrade fastapi/starlette now"; residual `ecdsa` PYSEC-2026-1325 → "Ignore w/ documented rationale".
+
+---

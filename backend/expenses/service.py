@@ -1,6 +1,5 @@
 import uuid
-from datetime import date, datetime, timezone
-from decimal import Decimal
+from datetime import date
 
 import structlog
 from fastapi import HTTPException
@@ -9,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from auth.models import User
 from expenses import repository as expense_repo
 from expenses.models import Expense
-from expenses.schemas import ExpenseCreate, ExpensePage, ExpenseResponse, SplitDetail
+from expenses.schemas import ExpenseCreate, ExpensePage, ExpenseResponse
 from groups import repository as group_repo
 
 logger = structlog.get_logger()
@@ -41,10 +40,14 @@ async def create_expense(
     for mid in member_ids:
         m = await group_repo.get_member_by_id(db, mid)
         if not m or m.group_id != group_id or m.removed_at is not None:
-            raise HTTPException(status_code=400, detail=f"Split member {mid} is not an active group member")
+            raise HTTPException(
+                status_code=400,
+                detail=f"Split member {mid} is not an active group member",
+            )
 
     # Delegate to balance engine for validation and computation
-    from balance.engine import SplitDetail as EngineSplitDetail, SplitType, compute_shares, validate_split
+    from balance.engine import SplitDetail as EngineSplitDetail
+    from balance.engine import SplitType, compute_shares, validate_split
     engine_details = [
         EngineSplitDetail(member_id=sd.member_id, value=sd.value)
         for sd in payload.split_details
@@ -58,7 +61,9 @@ async def create_expense(
     if not validation.valid:
         raise HTTPException(status_code=400, detail="; ".join(validation.errors))
 
-    shares = compute_shares(SplitType(payload.split_type), payload.amount, member_ids, engine_details)
+    shares = compute_shares(
+        SplitType(payload.split_type), payload.amount, member_ids, engine_details
+    )
 
     share_tuples = [
         (s.member_id, s.raw_value, s.computed_amount) for s in shares
@@ -78,7 +83,12 @@ async def create_expense(
     )
     await db.flush()
 
-    logger.info("expense_created", expense_id=str(expense.id), group_id=str(group_id), actor=str(user.id))
+    logger.info(
+        "expense_created",
+        expense_id=str(expense.id),
+        group_id=str(group_id),
+        actor=str(user.id),
+    )
     return expense
 
 
@@ -107,9 +117,9 @@ async def archive_expense(
     db: AsyncSession, group_id: uuid.UUID, expense_id: uuid.UUID, user: User
 ) -> Expense:
     # Check owner
-    from groups import repository as group_repo2
-    from groups.models import Group
     from sqlalchemy import select
+
+    from groups.models import Group
     result = await db.execute(select(Group).where(Group.id == group_id))
     group = result.scalar_one_or_none()
     if not group:
