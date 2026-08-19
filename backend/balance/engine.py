@@ -78,7 +78,8 @@ def validate_split(
 
     if len(split_details) != len(member_ids):
         errors.append(
-            f"Split details count ({len(split_details)}) must match member count ({len(member_ids)})"
+            f"Split details count ({len(split_details)}) must match "
+            f"member count ({len(member_ids)})"
         )
         return ValidationResult(False, errors)
 
@@ -90,7 +91,7 @@ def validate_split(
             if sd.value is None or sd.value < ZERO:
                 errors.append(f"Member {sd.member_id}: exact amount must be >= 0")
         if not errors:
-            total_split = sum(sd.value for sd in split_details if sd.value is not None)  # type: ignore[misc]
+            total_split = sum(sd.value for sd in split_details if sd.value is not None)
             if abs(total_split - total_amount) > CENT:
                 errors.append(
                     f"Split amounts ({total_split}) must equal total amount ({total_amount})"
@@ -101,7 +102,7 @@ def validate_split(
             if sd.value is None or sd.value < ZERO or sd.value > HUNDRED:
                 errors.append(f"Member {sd.member_id}: percentage must be in [0, 100]")
         if not errors:
-            total_pct = sum(sd.value for sd in split_details if sd.value is not None)  # type: ignore[misc]
+            total_pct = sum(sd.value for sd in split_details if sd.value is not None)
             if abs(total_pct - HUNDRED) > CENT:
                 errors.append(f"Percentages must sum to 100 (got {total_pct})")
 
@@ -110,7 +111,7 @@ def validate_split(
             if sd.value is None or sd.value < ZERO:
                 errors.append(f"Member {sd.member_id}: ratio must be >= 0")
         if not errors:
-            total_ratio = sum(sd.value for sd in split_details if sd.value is not None)  # type: ignore[misc]
+            total_ratio = sum(sd.value for sd in split_details if sd.value is not None)
             if total_ratio <= ZERO:
                 errors.append("At least one member must have a non-zero ratio")
 
@@ -143,7 +144,7 @@ def _compute_equal(total_amount: Decimal, member_ids: list[UUID]) -> list[Member
     n = len(member_ids)
     base = (total_amount / n).quantize(CENT, rounding=ROUND_HALF_UP)
     # Recalculate base with truncation to avoid over-distribution
-    base = (total_amount / n).quantize(CENT, rounding="ROUND_DOWN")  # type: ignore[arg-type]
+    base = (total_amount / n).quantize(CENT, rounding="ROUND_DOWN")
     remainder_cents = int((total_amount - base * n) * 100)
 
     # Stable ordering: sort by UUID string for determinism

@@ -1,14 +1,16 @@
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
-from sqlalchemy import select, update
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from auth.models import User
 from groups.models import Group, Member
 
 
-async def create(db: AsyncSession, owner_id: uuid.UUID, name: str, description: str | None) -> Group:
+async def create(
+    db: AsyncSession, owner_id: uuid.UUID, name: str, description: str | None
+) -> Group:
     group = Group(name=name, description=description, owner_id=owner_id)
     db.add(group)
     await db.flush()
@@ -104,7 +106,7 @@ async def member_email_exists(db: AsyncSession, group_id: uuid.UUID, email: str)
 async def remove_member(
     db: AsyncSession, member: Member, removed_by: uuid.UUID
 ) -> Member:
-    member.removed_at = datetime.now(timezone.utc)
+    member.removed_at = datetime.now(UTC)
     member.removed_by = removed_by
     member.display_name = "Former Member"
     await db.flush()

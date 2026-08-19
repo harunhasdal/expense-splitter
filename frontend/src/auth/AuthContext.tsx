@@ -59,10 +59,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   );
 }
 
+// eslint-disable-next-line react-refresh/only-export-components
 export function useAuth(): AuthState {
   return useContext(AuthContext);
 }
 
+// eslint-disable-next-line react-refresh/only-export-components
 export function useCurrentUser(): User | null {
   return useContext(AuthContext).user;
 }

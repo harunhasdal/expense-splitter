@@ -1,5 +1,5 @@
 import uuid
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 
 from sqlalchemy import Date, DateTime, Enum, ForeignKey, Numeric, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -21,13 +21,15 @@ class Expense(Base):
         Enum("EQUAL", "EXACT", "PERCENTAGE", "RATIO", name="split_type"), nullable=False
     )
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc)
+        DateTime(timezone=True), nullable=False, default=lambda: datetime.now(UTC)
     )
     created_by: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"), nullable=False)
     archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     archived_by: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id"), nullable=True)
 
-    splits: Mapped[list["ExpenseSplit"]] = relationship("ExpenseSplit", back_populates="expense", lazy="selectin")
+    splits: Mapped[list["ExpenseSplit"]] = relationship(
+        "ExpenseSplit", back_populates="expense", lazy="selectin"
+    )
 
 
 class ExpenseSplit(Base):

@@ -1,11 +1,12 @@
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
+from decimal import Decimal
 
 import structlog
 from fastapi import HTTPException
 from sqlalchemy import select
-from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from auth import repository as user_repo
 from auth.models import User
@@ -79,14 +80,18 @@ async def archive_group(
     # Import here to avoid circular dependency
     from balance.service import get_raw_balances
     balances = await get_raw_balances(db, group_id)
-    has_nonzero = any(abs(b) > 0.001 for balances_by_currency in balances.values() for b in balances_by_currency.values())
+    has_nonzero = any(
+        abs(b) > Decimal("0.001")
+        for balances_by_currency in balances.values()
+        for b in balances_by_currency.values()
+    )
 
     if has_nonzero and not force:
         raise HTTPException(status_code=409, detail="Group has unsettled balances")
 
     await group_repo.update_group(
         db, group,
-        archived_at=datetime.now(timezone.utc),
+        archived_at=datetime.now(UTC),
         archived_by=user.id,
         force_archived=has_nonzero and force,
     )
@@ -144,11 +149,14 @@ async def remove_member(
     from balance.service import get_raw_balances
     balances = await get_raw_balances(db, group_id)
     member_has_balance = any(
-        abs(balances_by_currency.get(member_id, 0)) > 0.001
+        abs(balances_by_currency.get(member_id, Decimal(0))) > Decimal("0.001")
         for balances_by_currency in balances.values()
     )
     if member_has_balance:
-        raise HTTPException(status_code=409, detail="Member has unsettled balance; settle before removing")
+        raise HTTPException(
+            status_code=409,
+            detail="Member has unsettled balance; settle before removing",
+        )
 
     await group_repo.remove_member(db, member, requesting_user.id)
     await db.flush()

@@ -1,6 +1,7 @@
 import logging
 
 import structlog
+from structlog.typing import EventDict, WrappedLogger
 
 from core.config import settings
 
@@ -10,8 +11,8 @@ SENSITIVE_KEYS = frozenset(
 
 
 def _filter_sensitive(
-    logger: object, method: str, event_dict: dict[str, object]
-) -> dict[str, object]:
+    logger: WrappedLogger, method: str, event_dict: EventDict
+) -> EventDict:
     return {
         k: "***" if k.lower() in SENSITIVE_KEYS else v for k, v in event_dict.items()
     }

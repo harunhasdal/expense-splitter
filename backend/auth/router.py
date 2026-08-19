@@ -33,9 +33,9 @@ async def callback(
     try:
         user, id_token = await auth_service.handle_callback(db, code, state, oauth_state)
     except ValueError:
-        raise HTTPException(status_code=400, detail="Sign-in failed")
+        raise HTTPException(status_code=400, detail="Sign-in failed") from None
     except Exception:
-        raise HTTPException(status_code=400, detail="Sign-in failed")
+        raise HTTPException(status_code=400, detail="Sign-in failed") from None
 
     csrf_serializer = auth_service._get_serializer()
     csrf_token = csrf_serializer.dumps(id_token[:16])

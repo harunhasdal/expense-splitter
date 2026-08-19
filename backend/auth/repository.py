@@ -1,6 +1,6 @@
 import uuid
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import structlog
 from sqlalchemy import select, update
@@ -31,7 +31,7 @@ async def get_by_email(db: AsyncSession, email: str) -> User | None:
 
 async def upsert_cognito_user(db: AsyncSession, profile: CognitoProfile) -> tuple[User, bool]:
     """Upsert by cognito_sub. Returns (user, is_new)."""
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     email = profile.email.lower()
 
     result = await db.execute(select(User).where(User.cognito_sub == profile.cognito_sub))

@@ -1,12 +1,11 @@
 import secrets
 import time
-from functools import lru_cache
 from typing import Any
 
 import httpx
 import structlog
 from itsdangerous import URLSafeTimedSerializer
-from jose import JWTError, jwk, jwt
+from jose import JWTError, jwt
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from auth.models import User

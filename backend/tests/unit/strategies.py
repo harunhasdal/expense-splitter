@@ -3,7 +3,7 @@ import uuid
 from decimal import Decimal
 
 from hypothesis import strategies as st
-from hypothesis.strategies import SearchStrategy, composite
+from hypothesis.strategies import composite
 
 from balance.engine import (
     ExpenseInput,
@@ -56,7 +56,10 @@ def exact_split_input(draw: st.DrawFn) -> tuple[Decimal, list[uuid.UUID], list[S
     cuts = [0] + cuts + [total_cents]
     shares_cents = [cuts[i + 1] - cuts[i] for i in range(n)]
     total = Decimal(total_cents) / 100
-    details = [SplitDetail(m, Decimal(c) / 100) for m, c in zip(members, shares_cents)]
+    details = [
+        SplitDetail(m, Decimal(c) / 100)
+        for m, c in zip(members, shares_cents, strict=False)
+    ]
     return total, members, details
 
 
@@ -73,7 +76,7 @@ def percentage_split_input(draw: st.DrawFn) -> tuple[Decimal, list[uuid.UUID], l
     )))
     cuts = [0] + cuts + [100]
     pcts = [cuts[i + 1] - cuts[i] for i in range(n)]
-    details = [SplitDetail(m, Decimal(p)) for m, p in zip(members, pcts)]
+    details = [SplitDetail(m, Decimal(p)) for m, p in zip(members, pcts, strict=False)]
     return total, members, details
 
 
@@ -90,7 +93,7 @@ def ratio_split_input(draw: st.DrawFn) -> tuple[Decimal, list[uuid.UUID], list[S
     # Ensure at least one non-zero
     if all(r == 0 for r in ratios):
         ratios[0] = 1
-    details = [SplitDetail(m, Decimal(r)) for m, r in zip(members, ratios)]
+    details = [SplitDetail(m, Decimal(r)) for m, r in zip(members, ratios, strict=False)]
     return total, members, details
 
 
@@ -99,7 +102,7 @@ def expense_input(draw: st.DrawFn) -> ExpenseInput:
     """Generate a realistic expense with an equal split."""
     currency = draw(st.sampled_from(["GBP", "USD", "EUR", "JPY"]))
     total, members, details = draw(equal_split_input())
-    from balance.engine import SplitType, compute_shares
+    from balance.engine import compute_shares
     shares_list = compute_shares(SplitType.EQUAL, total, members, details)
     payer = draw(st.sampled_from(members))
     return ExpenseInput(
@@ -139,7 +142,7 @@ def balance_map_input(draw: st.DrawFn) -> dict[str, list[MemberBalance]]:
             Decimal(draw(st.integers(min_value=-10000, max_value=10000))) / 100
             for _ in range(n - 1)
         ]
-        last = -sum(amounts)
+        last = -sum(amounts, Decimal(0))
         all_amounts = amounts + [last]
-        result[currency] = [MemberBalance(m, a) for m, a in zip(members, all_amounts)]
+        result[currency] = [MemberBalance(m, a) for m, a in zip(members, all_amounts, strict=False)]
     return result
