@@ -1,3 +1,4 @@
+import structlog
 from fastapi import APIRouter, Cookie, Depends, HTTPException, Response
 from fastapi.responses import RedirectResponse
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -8,6 +9,8 @@ from auth.models import User
 from auth.schemas import UserResponse
 from core.config import settings
 from core.db import get_db
+
+logger = structlog.get_logger()
 
 router = APIRouter()
 
@@ -32,9 +35,11 @@ async def callback(
         raise HTTPException(status_code=400, detail="Missing state cookie")
     try:
         user, id_token = await auth_service.handle_callback(db, code, state, oauth_state)
-    except ValueError:
+    except ValueError as e:
+        logger.warning("signin_failed", reason=str(e), error_type=type(e).__name__)
         raise HTTPException(status_code=400, detail="Sign-in failed") from None
-    except Exception:
+    except Exception as e:
+        logger.exception("signin_failed", reason=str(e), error_type=type(e).__name__)
         raise HTTPException(status_code=400, detail="Sign-in failed") from None
 
     csrf_serializer = auth_service._get_serializer()
