@@ -40,7 +40,7 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     provider_enum = sa.Enum('google', 'github', name='oauth_provider')
-    provider_enum.create(op.get_bind(), checkfirst=True)
+    provider_enum.create(op.get_bind(), checkfirst=True)  # type: ignore[no-untyped-call]
     op.add_column('users', sa.Column('provider', provider_enum, nullable=False))
     op.add_column('users', sa.Column('provider_id', sa.String(length=100), nullable=False))
     op.create_unique_constraint('uq_user_provider', 'users', ['provider', 'provider_id'])
