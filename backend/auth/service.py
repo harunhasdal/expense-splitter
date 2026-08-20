@@ -104,6 +104,11 @@ async def validate_token(id_token: str) -> dict[str, Any]:
             algorithms=["RS256"],
             audience=settings.cognito_client_id,
             issuer=settings.cognito_issuer,
+            # Cognito ID tokens carry an at_hash claim. python-jose tries to
+            # verify it against the access token, which we don't pass here
+            # (we only validate the ID token). Signature, audience, and issuer
+            # are still fully verified, so skip the optional at_hash check.
+            options={"verify_at_hash": False},
         )
     except JWTError as e:
         logger.warning("id_token_validation_failed", error=str(e), error_type=type(e).__name__)
