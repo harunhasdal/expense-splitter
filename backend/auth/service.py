@@ -106,6 +106,7 @@ async def validate_token(id_token: str) -> dict[str, Any]:
             issuer=settings.cognito_issuer,
         )
     except JWTError as e:
+        logger.warning("id_token_validation_failed", error=str(e), error_type=type(e).__name__)
         raise ValueError("Invalid token") from e
     if claims.get("token_use") != "id":
         raise ValueError("Not an ID token")
